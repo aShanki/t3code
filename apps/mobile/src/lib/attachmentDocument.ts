@@ -119,8 +119,10 @@ export function useAttachmentDocument(input: {
   const remoteUrl = AsyncResult.isSuccess(remote) && !remote.waiting ? remote.value : null;
   const uri = attachment ? localPreview.uri : (remoteUrl?.url ?? null);
   const needsText = kind === "text" || kind === "markdown" || (kind === "html" && !rendered);
+  // WebViews may not load device files, so a rendered local HTML file is passed in as text.
+  const readsText = needsText || (kind === "html" && uri !== null && isLocalUri(uri));
   const text = useAtomValue(
-    uri && needsText
+    uri && readsText
       ? attachmentTextAtom({
           uri,
           authorizedAt: remoteUrl?.authorizedAt ?? null,

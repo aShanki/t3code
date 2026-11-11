@@ -13,14 +13,18 @@ import { useHardwareBack } from "../../lib/backHandler";
 import { isPdfPreviewUri } from "../../lib/pdfPreview";
 import { useContentTopInset } from "../../components/ui/useBarInset";
 
-export function WorkspaceFileWebPreview(props: { readonly uri: string | null }) {
+/** `html` renders that markup instead of loading `uri`, for files on the device. */
+export function WorkspaceFileWebPreview(props: {
+  readonly uri: string | null;
+  readonly html?: string;
+}) {
   if (props.uri === null) {
     return <FilePreviewLoading message="Preparing preview..." background="card" />;
   }
-  return <DocumentWebPreview key={props.uri} uri={props.uri} />;
+  return <DocumentWebPreview key={props.uri} uri={props.uri} html={props.html} />;
 }
 
-function DocumentWebPreview(props: { readonly uri: string }) {
+function DocumentWebPreview(props: { readonly uri: string; readonly html?: string | undefined }) {
   const headerInset = useContentTopInset();
   const [loadProgress, setLoadProgress] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -55,7 +59,8 @@ function DocumentWebPreview(props: { readonly uri: string }) {
       ) : null}
       <View className="flex-1" style={linkedPdf ? { display: "none" } : undefined}>
         <WebView
-          source={{ uri: props.uri }}
+          // Inline markup gets an opaque origin with no access to the device's files.
+          source={props.html === undefined ? { uri: props.uri } : { html: props.html }}
           // react-native-webview defaults to "never", which starts the page under the header.
           contentInsetAdjustmentBehavior="automatic"
           originWhitelist={["*"]}

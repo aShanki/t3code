@@ -88,6 +88,19 @@ export function AttachmentDocumentBody(props: {
   if (document.kind === "audio") {
     return <AudioFilePreview key={document.revision} uri={document.uri} onRetry={document.retry} />;
   }
+  if (document.kind === "html" && /^(file|content):/.test(document.uri)) {
+    if (!document.content) return <FilePreviewLoading message="Loading file..." />;
+    return (
+      <View className="flex-1 bg-sheet">
+        {document.content.truncated ? (
+          <FilePreviewNotice title="Partial file">
+            Preview limited to the first 1 MB. Save or share the file to read it in full.
+          </FilePreviewNotice>
+        ) : null}
+        <WorkspaceFileWebPreview uri={document.uri} html={document.content.text} />
+      </View>
+    );
+  }
   if (document.kind === "html") {
     return props.htmlRender ? (
       <HtmlRenderWebView key={document.uri} uri={document.uri} title={props.name} nested={false} />
