@@ -30,6 +30,15 @@ import { AppText as Text, AppTextInput as TextInput } from "../../../components/
 import { Button } from "../../../components/ui/Button";
 import * as Dialog from "../../../components/ui/Dialog";
 import { FilePreviewModal, type FilePreviewSource } from "../../../components/ui/FilePreviewModal";
+import { ComposerAttachmentStrip } from "../../../components/ComposerAttachmentStrip";
+import { ComposerActionButton } from "../../../components/ComposerToolbar";
+import {
+  pickComposerFiles,
+  pickComposerMedia,
+  type DraftComposerAttachment,
+} from "../../../lib/composerImages";
+import { releaseUnusedComposerAttachmentFiles } from "../../../state/use-composer-drafts";
+import { ComposerAttachmentButton } from "../../threads/ComposerAttachmentButton";
 import { downloadAttachmentForPreview } from "../../../lib/attachmentDownload";
 import { uuidv4 } from "../../../lib/uuid";
 import { SelectableMarkdownText } from "../../../native/SelectableMarkdownText";
@@ -56,7 +65,7 @@ import {
   type RajeshDeviceLogin,
   type RajeshFile,
 } from "./rajesh-gateway";
-import { pickRajeshFile } from "./rajesh-attachment";
+import { attachmentsForRajesh, checkRajeshAttachments } from "./rajesh-attachment";
 import {
   clearRajeshChatCache,
   readRajeshChatCache,
@@ -463,16 +472,16 @@ function useRajeshFeed(chat: RajeshChat, token: string | null) {
 interface PendingSend {
   readonly requestId: string;
   readonly text: string;
-  readonly file: RajeshFile | null;
+  readonly files: ReadonlyArray<RajeshFile>;
   readonly sentAt: number;
   /** Set once retries stop; the bubble then offers a manual retry. */
   readonly error: string | null;
 }
 
-const newPendingSend = (text: string, file: RajeshFile | null): PendingSend => ({
+const newPendingSend = (text: string, files: ReadonlyArray<RajeshFile>): PendingSend => ({
   requestId: uuidv4(),
   text,
-  file,
+  files,
   sentAt: Date.now(),
   error: null,
 });
@@ -497,7 +506,7 @@ async function sendWithRetry(
         chat.taskKey,
         send.requestId,
         send.text,
-        send.file ?? undefined,
+        send.files,
       );
       return null;
     } catch (error) {
@@ -520,7 +529,8 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const styles = useMarkdownStyles();
   const [token, setToken] = useState<string | null | undefined>(undefined);
   const [text, setText] = useState("");
-  const [file, setFile] = useState<RajeshFile | null>(null);
+  const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
+  const [preparing, setPreparing] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const input = useRef<TextInputInstance>(null);
   const keyboard = useKeyboardOverlap();
@@ -558,16 +568,27 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     mark(null);
     mark(await sendWithRetry(chat, token, send));
   };
-  const submit = () => {
+  const submit = async () => {
     const message = text.trim();
-    if ((message === "" && file === null) || !token) return;
+    if ((message === "" && attachments.length === 0) || !token || preparing) return;
+    const drafts = attachments;
+    setPreparing(true);
+    // Read before clearing the composer, so a file that cannot be read stays to be removed.
+    const files = await attachmentsForRajesh(drafts)
+      .catch((error: unknown) => {
+        Dialog.alert("Could not attach file", errorText(error));
+        return null;
+      })
+      .finally(() => setPreparing(false));
+    if (files === null) return;
     const send = newPendingSend(
       replyTo === null ? message : rajeshReplyText(replyTo, message),
-      file,
+      files,
     );
     setPending((all) => [...all, send]);
     setText("");
-    setFile(null);
+    setAttachments([]);
+    void releaseUnusedComposerAttachmentFiles(drafts);
     setReplyTo(null);
     // The new bubble is laid out first; the list then scrolls to it (see onContentSizeChange).
     followSend.current = true;
@@ -657,17 +678,24 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     if (field?.isFocused() && !Keyboard.isVisible()) field.blur();
     field?.focus();
   };
-  const attach = () =>
-    void pickRajeshFile()
-      .then((picked) => {
-        if (picked !== null) setFile(picked);
-      })
-      .catch((error: unknown) =>
-        Dialog.alert(
-          "Could not attach file",
-          error instanceof Error ? error.message : "Try another file.",
-        ),
-      );
+  // The pickers and the file strip are the T3 thread composer's own.
+  const pick = async (kind: "media" | "files") => {
+    const result =
+      kind === "files"
+        ? await pickComposerFiles({ existingCount: attachments.length })
+        : await pickComposerMedia({ existingCount: attachments.length });
+    const picked = "files" in result ? result.files : result.attachments;
+    const next = [...attachments, ...picked];
+    const problem = result.error ?? checkRajeshAttachments(next);
+    if (problem !== null) {
+      Dialog.alert("Could not attach file", problem);
+      if (checkRajeshAttachments(next) !== null) {
+        void releaseUnusedComposerAttachmentFiles(picked);
+        return;
+      }
+    }
+    setAttachments(next);
+  };
 
   if (token === undefined) {
     return <View className="flex-1 bg-screen" />;
@@ -713,7 +741,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
       return (
         recorded.text === mine.text &&
         recorded.replyTo === mine.replyTo &&
-        recorded.files.length === (send.file ? 1 : 0)
+        recorded.files.length === send.files.length
       );
     });
   });
@@ -742,7 +770,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     if (link?.environmentId) openThread(link.environmentId, link.threadId);
     else if (/^https?:\/\//i.test(href)) void Linking.openURL(href).catch(() => undefined);
   };
-  const canSend = text.trim() !== "" || file !== null;
+  const canSend = (text.trim() !== "" || attachments.length > 0) && !preparing;
 
   return (
     <View
@@ -810,7 +838,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                   <View className="max-w-[85%] self-end">
                     <UserBubble
                       {...pendingContent(row.send)}
-                      files={row.send.file ? [{ name: row.send.file.name, attachment: null }] : []}
+                      files={row.send.files.map((file) => ({ name: file.name, attachment: null }))}
                       textStyle={styles.user.nativeTextStyle}
                       onLinkPress={onLinkPress}
                     />
@@ -952,48 +980,39 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
             </Pressable>
           </View>
         ) : null}
-        {file ? (
-          <View className="mb-2 flex-row items-center gap-2 self-start rounded-2xl bg-grouped-card py-1 pl-3">
-            <SymbolView
-              name="doc.text"
-              size={16}
-              tintColorClassName="accent-foreground-muted"
-              type="monochrome"
+        {attachments.length > 0 ? (
+          <View className="mb-2">
+            <ComposerAttachmentStrip
+              attachments={attachments}
+              onRemove={(id) => {
+                const removed = attachments.filter((item) => item.id === id);
+                setAttachments(attachments.filter((item) => item.id !== id));
+                void releaseUnusedComposerAttachmentFiles(removed);
+              }}
+              onPressPreview={(source) => setImagePreview({ source, dispose: () => undefined })}
+              onPressDocument={(attachment) =>
+                navigation.navigate("ThreadAttachment", {
+                  attachmentId: attachment.id,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: String(attachment.sizeBytes),
+                  localFileUri: attachment.fileUri,
+                })
+              }
             />
-            <Text numberOfLines={1} className="max-w-[220px] text-sm leading-5 text-foreground">
-              {file.name}
-            </Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Remove ${file.name}`}
-              onPress={() => setFile(null)}
-              className="h-10 w-10 items-center justify-center"
-            >
-              <SymbolView
-                name="xmark.circle.fill"
-                size={18}
-                tintColorClassName="accent-foreground-muted"
-                type="monochrome"
-              />
-            </Pressable>
           </View>
         ) : null}
         <OutlinedInput radius="rounded-3xl">
           {(focus) => (
             <>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add attachment"
-                onPress={attach}
-                className="h-12 w-12 items-center justify-center"
-              >
-                <SymbolView
-                  name="plus"
-                  size={20}
-                  tintColorClassName="accent-icon"
-                  type="monochrome"
+              <View className="h-12 w-12 items-center justify-center">
+                <ComposerAttachmentButton
+                  supportsFiles
+                  disabled={preparing}
+                  onPickMedia={() => pick("media")}
+                  onPickFiles={() => pick("files")}
                 />
-              </Pressable>
+              </View>
               <TextInput
                 {...focus}
                 ref={input}
@@ -1007,27 +1026,16 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                 textAlignVertical="center"
                 className="max-h-36 min-h-12 min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2.5 text-base leading-6 text-foreground"
               />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Send message"
-                accessibilityState={{ disabled: !canSend }}
-                disabled={!canSend}
-                onPress={submit}
-                className="h-12 w-12 items-center justify-center"
-              >
-                <View
-                  className={`h-11 w-11 items-center justify-center rounded-full ${canSend ? "bg-primary" : "bg-grouped-card"}`}
-                >
-                  <SymbolView
-                    name="arrow.up"
-                    size={22}
-                    tintColorClassName={
-                      canSend ? "accent-primary-foreground" : "accent-foreground-muted"
-                    }
-                    type="monochrome"
-                  />
-                </View>
-              </Pressable>
+              <View className="h-12 items-center justify-center">
+                <ComposerActionButton
+                  size="large"
+                  accessibilityLabel="Send message"
+                  icon="arrow.up"
+                  variant="primary"
+                  disabled={!canSend}
+                  onPress={() => void submit()}
+                />
+              </View>
             </>
           )}
         </OutlinedInput>

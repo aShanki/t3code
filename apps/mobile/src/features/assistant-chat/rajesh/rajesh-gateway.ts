@@ -187,7 +187,7 @@ export const rajeshFileLink = async (baseUrl: string, token: string, attachmentI
     )
   ).url;
 
-/** A file as the gateway takes it: base64 contents, one per message. */
+/** A file as the gateway takes it: base64 contents, up to ten per message. */
 export interface RajeshFile {
   readonly name: string;
   readonly mime?: string;
@@ -201,13 +201,13 @@ export const sendRajeshMessage = (
   key: string,
   requestId: string,
   text: string,
-  file?: RajeshFile,
+  files: ReadonlyArray<RajeshFile>,
 ) =>
   call<{ readonly accepted: boolean }>(baseUrl, `${taskPath(key)}/messages`, {
     token,
-    body: { requestId, text, ...(file ? { files: [file] } : {}) },
+    body: { requestId, text, ...(files.length > 0 ? { files } : {}) },
     // An upload of several megabytes over a slow connection needs longer than a plain request.
-    ...(file ? { timeoutMs: 120_000 } : {}),
+    ...(files.length > 0 ? { timeoutMs: 120_000 } : {}),
   });
 
 export const stopRajesh = (baseUrl: string, token: string, key: string, requestId: string) =>
