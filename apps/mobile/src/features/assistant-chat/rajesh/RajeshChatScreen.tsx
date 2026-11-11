@@ -634,7 +634,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
         .then(
           async (folder) => {
             const bytes = await new File(local.uri).bytes();
-            folder.createFile(attachment.name, attachment.mime).write(bytes);
+            await folder.createFile(attachment.name, attachment.mime).write(bytes);
             void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
               () => undefined,
             );

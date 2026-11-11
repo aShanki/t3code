@@ -49,17 +49,14 @@ export function writeRajeshChatCache(baseUrl: string, snapshot: RajeshChatSnapsh
   try {
     const file = cacheFile(baseUrl);
     file.parentDirectory.create({ idempotent: true, intermediates: true });
-    // Written whole to a sibling first, so a crash mid-write never leaves a torn cache.
-    const temporary = new File(file.parentDirectory, `${file.name}.tmp`);
-    temporary.write(
+    // A write cut short leaves JSON that does not parse, which reads as no cache.
+    file.writeSync(
       JSON.stringify({
         format: FORMAT,
         ...snapshot,
         messages: snapshot.messages.slice(-KEEP_MESSAGES),
       }),
     );
-    if (file.exists) file.delete();
-    temporary.move(file);
   } catch (error) {
     console.warn("[rajesh] could not save the chat for offline launch", error);
   }
