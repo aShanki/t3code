@@ -37,6 +37,7 @@ import {
   installAgentNotificationNavigation,
   setAgentNotificationPathname,
 } from "./features/agent-awareness/notificationNavigation";
+import { installLocalAgentAlerts } from "./features/agent-awareness/localAgentAlertsService";
 import {
   installAppShortcuts,
   recordAppShortcutNavigationState,
@@ -95,6 +96,7 @@ import {
 import { pruneNewTaskFlowStates } from "./features/threads/new-task-flow-state";
 import { pruneNewTaskBranchCheckouts } from "./features/threads/NewTaskDraftRouteScreen";
 import { installAppUpdateChecks } from "./features/updates/app-updates";
+import { installRajeshUpdateChecks } from "./features/updates/rajesh-updates";
 
 import "../global.css";
 
@@ -196,8 +198,10 @@ const appServiceDisposers = [
   installComposerAttachmentUploads(),
   startIncomingShareInbox(),
   installAgentNotificationNavigation(linkToAppPath),
+  installLocalAgentAlerts(),
   installAppShortcuts(linkToAppPath),
   installAppUpdateChecks(),
+  installRajeshUpdateChecks(),
   installShowcaseCapture(rootPathnameFromState),
 ];
 disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.hot, () => {

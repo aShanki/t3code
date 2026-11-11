@@ -15,7 +15,7 @@ import {
   readMcpAppReference,
   type McpAppReference,
 } from "./mcpApp.ts";
-import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
+import { resolveT3McpToolDefinition, resolveT3McpToolId } from "./t3McpToolPresentation.ts";
 
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
@@ -194,6 +194,22 @@ export function htmlRenderFromToolItem(item: {
   if (resolveT3McpToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
+}
+
+/** Threads a T3 thread-creating tool call reports as created, in launch order. */
+export function createdThreadIdsFromToolItem(item: {
+  readonly toolName: string | null | undefined;
+  readonly output?: unknown;
+}): readonly string[] {
+  if (resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "thread-create") return [];
+  const output = compactDynamicToolOutput(item.output);
+  if (output === undefined || output.isError) return [];
+  if (output.threads !== undefined) {
+    return output.threads.flatMap((thread) =>
+      thread.threadId === undefined || thread.status === "rolled_back" ? [] : [thread.threadId],
+    );
+  }
+  return output.threadId === undefined || output.status === "rolled_back" ? [] : [output.threadId];
 }
 
 /** The thread-owned file `preview_recording_stop` stored for the agent. */

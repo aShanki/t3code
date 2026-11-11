@@ -6,6 +6,15 @@ interface AndroidAgentNotifications {
   configure(deviceId: string, userId: string, scheme: string, ongoingEnabled: boolean): void;
   clear(): void;
   setThreadOnScreen?(path: string | null): void;
+  receiveLocal?(scheme: string, data: Record<string, string>): void;
+  receiveLocalLater?(
+    scheme: string,
+    data: Record<string, string>,
+    delayMs: number,
+    key: string,
+  ): void;
+  cancelLocalLater?(key: string): void;
+  setBackgroundConnection?(enabled: boolean, text: string): void;
   openLiveUpdateSettings?(): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
 }
@@ -40,6 +49,28 @@ export function showAndroidShowcaseAgentActivity(data: Record<string, string>): 
 
 export function clearAndroidAgentNotifications(): void {
   native?.clear?.();
+}
+
+/** Renders a relay-shaped payload built on this device, through the same native path. */
+export function receiveLocalAndroidAgentAlert(data: Record<string, string>): void {
+  native?.receiveLocal?.(appScheme(), data);
+}
+
+/** Posts after `delayMs` unless cancelled; native timers keep running in the background. */
+export function receiveLocalAndroidAgentAlertLater(
+  data: Record<string, string>,
+  delayMs: number,
+  key: string,
+): void {
+  native?.receiveLocalLater?.(appScheme(), data, delayMs, key);
+}
+
+export function cancelLocalAndroidAgentAlert(key: string): void {
+  native?.cancelLocalLater?.(key);
+}
+
+export function setAndroidBackgroundConnection(enabled: boolean, text: string): void {
+  native?.setBackgroundConnection?.(enabled, text);
 }
 
 export function setAndroidThreadOnScreen(path: string | null): void {

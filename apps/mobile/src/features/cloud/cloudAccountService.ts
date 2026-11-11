@@ -26,6 +26,7 @@ import {
 import { removeCloudEnvironments } from "./cloud-drafts";
 import { clearConnectOnboardingRequest, requestConnectOnboarding } from "./connectOnboarding";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
+import { isPersonalFork } from "../../lib/personalFork";
 
 type ClerkInstance = ReturnType<typeof getClerkInstance>;
 
@@ -38,7 +39,8 @@ export function activateCloudRelayAccount(
   accountId: string,
   tokenProvider: () => Promise<string | null>,
 ): void {
-  setAgentAwarenessRelayTokenProvider(tokenProvider, accountId);
+  // Relay pushes need T3's Firebase app, which a personal fork is not; it alerts locally instead.
+  if (!isPersonalFork) setAgentAwarenessRelayTokenProvider(tokenProvider, accountId);
   setManagedRelaySession(appAtomRegistry, {
     accountId,
     readClerkToken: tokenProvider,

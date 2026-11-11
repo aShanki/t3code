@@ -61,7 +61,12 @@ describe("workspace root navigation", () => {
   });
 
   it("keeps the registered defaults while customization is unavailable", () => {
-    expect(resolveWorkspaceTabOrder(undefined)).toEqual(["threads", "pullRequests", "usage"]);
+    expect(resolveWorkspaceTabOrder(undefined)).toEqual([
+      "chat",
+      "threads",
+      "pullRequests",
+      "usage",
+    ]);
     expect(resolveWorkspaceTabOrder(["home", "usage", "issues", "threads"])).toEqual(
       resolveWorkspaceTabOrder(undefined),
     );
@@ -221,6 +226,8 @@ vi.mock("../../../components/ui/useAndroidControlSizing", () => ({
   useAndroidControlSizing: () => ({ fabClearance: 64, scale: 1, fabSize: 56 }),
 }));
 vi.mock("../../home/HomeRouteScreen", () => ({ HomeRouteScreen: () => null }));
+vi.mock("../../assistant-chat/ChatTabScreen", () => ({ ChatTabScreen: () => null }));
+vi.mock("../../assistant-chat/assistant-chat-state", () => ({ useRajeshChat: () => null }));
 vi.mock("../../pull-requests/PullRequestFilterMenuContext", () => ({
   PullRequestFilterMenuProvider: ({ children }: { children: ReactNode }) =>
     createElement("div", null, children),

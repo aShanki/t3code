@@ -1,3 +1,4 @@
+import { useRoute } from "@react-navigation/native";
 import { AppBar } from "../../components/ui/AppBar";
 import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -8,6 +9,7 @@ import {
   useThreadGitMenuDefinition,
   type ThreadGitControlsProps,
 } from "./ThreadGitControls";
+import { threadReturnTab } from "./thread-route-state";
 
 export function ThreadHeader(props: {
   readonly title: string;
@@ -19,7 +21,7 @@ export function ThreadHeader(props: {
   readonly inspectorMode: ThreadInspectorMode | null;
   readonly onOpenFilesInspector: () => void;
 }) {
-  const goBack = useWorkspaceBackNavigation("threads");
+  const goBack = useWorkspaceBackNavigation(threadReturnTab(useRoute().params));
   const { panes, toggleAuxiliaryPane, composerKeyboardActive, startNewTask } =
     useAdaptiveWorkspaceLayout();
   const gitMenu = useThreadGitMenuDefinition(props.gitControls);

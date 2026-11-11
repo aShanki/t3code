@@ -80,7 +80,7 @@ import {
 } from "../terminal/terminalLaunchContext";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreen";
 import { ThreadScreenBinding, ThreadScreenFallback, ThreadScreenHost } from "./ThreadScreenHost";
-import { draftRouteIdentity } from "./thread-route-state";
+import { draftRouteIdentity, threadReturnTab } from "./thread-route-state";
 import { NewTaskDraftRouteScreen, type NewTaskDraftRouteParams } from "./NewTaskDraftRouteScreen";
 import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -130,7 +130,7 @@ function firstRouteParam(value: string | string[] | undefined): string | null {
 const InspectorHeaderShownContext = createContext(false);
 
 function ThreadRouteFallbackLayout(props: { readonly children: ReactNode }) {
-  const goBack = useWorkspaceBackNavigation("threads");
+  const goBack = useWorkspaceBackNavigation(threadReturnTab(useRoute().params));
   const inspectorHeaderShown = use(InspectorHeaderShownContext);
   return (
     <ThreadScreenFallback
@@ -159,6 +159,7 @@ type ThreadRouteScreenRouteProps = StaticScreenProps<{
   readonly draft?: NewTaskDraftRouteParams;
   readonly inspector?: ThreadInspectorTarget;
   readonly prompt?: string | string[];
+  readonly returnTab?: "chat";
 }>;
 
 interface ThreadRouteScreenProps extends ThreadRouteScreenRouteProps {
@@ -235,7 +236,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
 }
 
 function LiveThreadRouteController(props: ThreadRouteScreenProps) {
-  useAndroidWorkspaceBack("threads");
+  useAndroidWorkspaceBack(threadReturnTab(props.route.params));
   const connectionsReady = useConnectionsReady();
   const { connectionState } = useRemoteConnectionStatus();
   const { selectedThread } = useThreadSelection();

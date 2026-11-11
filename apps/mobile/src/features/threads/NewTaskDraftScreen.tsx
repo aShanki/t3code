@@ -3,7 +3,7 @@ import { NativeScrollEdgeEffectsContext } from "../../native/NativeScrollViewMar
 import { DraftThreadHeader } from "./DraftThreadHeader";
 import { useComposerAttachmentActions } from "../../state/use-composer-attachment-actions";
 import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorkspaceNavigation";
-import { submittedThreadParams } from "./thread-route-state";
+import { submittedThreadParams, threadReturnTab } from "./thread-route-state";
 import { ThreadScreenBinding, ThreadScreenFallback } from "./ThreadScreenHost";
 import { draftThreadShell } from "./draft-thread-shell";
 import { useRememberThreadProject } from "./useRememberThreadProject";
@@ -73,7 +73,7 @@ import {
   isModelSelectionUnavailable,
   resolveSelectableModelSelection,
 } from "../../lib/modelOptions";
-import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
+import { enqueueThreadOutboxMessage, type QueuedThreadMessage } from "../../state/thread-outbox";
 import {
   useRemoteConnections,
   useRemoteEnvironmentRuntime,
@@ -157,14 +157,15 @@ export function NewTaskDraftScreen(props: {
   };
   readonly draftId?: string;
   readonly incomingShareId?: string;
+  readonly onQueued?: (message: QueuedThreadMessage) => void;
 }) {
   const [creationMetadata] = useState(makeTurnCommandMetadata);
   const projects = useProjects();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
-  const goBack = useWorkspaceBackNavigation("threads");
   const currentRoute = useRoute();
+  const goBack = useWorkspaceBackNavigation(threadReturnTab(currentRoute.params));
   const flowKey = newTaskFlowKey(currentRoute);
   const { getShare, isLoading: isIncomingShareInboxLoading } = useIncomingShare();
   const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
@@ -668,6 +669,7 @@ export function NewTaskDraftScreen(props: {
       );
       return null;
     }
+    props.onQueued?.(message);
     promptInputRef.current?.blur();
     navigation.dispatch(
       CommonActions.setParams(

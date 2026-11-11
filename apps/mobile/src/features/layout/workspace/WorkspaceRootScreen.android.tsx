@@ -12,6 +12,8 @@ import { WorkspaceEmptyDetail } from "../WorkspaceEmptyDetail";
 import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { useAndroidControlSizing } from "../../../components/ui/useAndroidControlSizing";
 import { HomeRouteScreen } from "../../home/HomeRouteScreen";
+import { ChatTabScreen } from "../../assistant-chat/ChatTabScreen";
+import { useRajeshChat } from "../../assistant-chat/assistant-chat-state";
 import { PullRequestsScreen } from "../../pull-requests/PullRequestsScreen";
 import { PullRequestToolbar } from "./PullRequestToolbar.android";
 import { useAdaptiveWorkspaceLayout } from "../AdaptiveWorkspaceLayout";
@@ -49,6 +51,7 @@ function WorkspaceRoot() {
           : 16,
   };
   const tab = workspace.state.selectedTab;
+  const rajeshChat = useRajeshChat();
 
   return (
     <WorkspaceTabsContext value={context}>
@@ -61,7 +64,7 @@ function WorkspaceRoot() {
             layout.usesSplitView
               ? insets
               : floatingTabsEnabled
-                ? tab === "usage"
+                ? tab === "usage" || tab === "chat"
                   ? { ...insets, bottom: context.bottomClearance }
                   : insets
                 : { ...insets, bottom: 0 }
@@ -74,13 +77,19 @@ function WorkspaceRoot() {
               <WorkspaceNoTabs />
             )
           ) : (
-            <WorkspaceAppBarScope enabled={!layout.usesSplitView}>
+            <WorkspaceAppBarScope
+              enabled={!layout.usesSplitView && !(tab === "chat" && rajeshChat)}
+            >
               <WorkspaceTabPanes
                 tabs={TABS}
                 selected={tab}
                 renderTab={(tab) =>
                   tab === "threads" ? (
                     <HomeRouteScreen />
+                  ) : tab === "chat" ? (
+                    <WorkspacePageFrame width={workspacePageWidth ?? null}>
+                      <ChatTabScreen />
+                    </WorkspacePageFrame>
                   ) : tab !== "pullRequests" ? (
                     <WorkspacePageFrame width={workspacePageWidth ?? null}>
                       <WorkspaceExtraTab tab={tab} />

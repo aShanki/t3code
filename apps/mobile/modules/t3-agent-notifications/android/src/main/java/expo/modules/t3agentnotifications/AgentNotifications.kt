@@ -11,6 +11,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
@@ -43,6 +45,7 @@ class AgentActivityExpiryReceiver : BroadcastReceiver() {
 /** Handles data pushes natively so delivery does not depend on a running JS bridge. */
 object AgentNotifications {
   private const val STORE = "t3-agent-notifications"
+  private const val LOCAL_STORE = "t3-agent-notifications-local"
   private const val ACTIVITY_CHANNEL = "agent-activity"
   private const val ALERT_CHANNEL = "agent-alerts"
   private const val ACTIVITY_TAG = "t3-agent-activity"
@@ -89,6 +92,38 @@ object AgentNotifications {
         it.tag?.startsWith("$ALERT_TAG-summary:") == true
     }
       .forEach { manager.cancel(it.tag, it.id) }
+  }
+
+  // React Native pauses JavaScript timers in the background, so held local alerts wait here.
+  private val delayed = Handler(Looper.getMainLooper())
+  private val pendingLocal = mutableMapOf<String, Runnable>()
+
+  /**
+   * Alerts a build without relay push raises from its own environment connections. They skip
+   * the relay identity, which signing out clears, and keep their own dedupe history.
+   */
+  @Synchronized
+  fun receiveLocal(context: Context, scheme: String, data: Map<String, String>) {
+    if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+    channels(context)
+    showAlert(context, context.getSharedPreferences(LOCAL_STORE, Context.MODE_PRIVATE), scheme, data)
+  }
+
+  @Synchronized
+  fun receiveLater(context: Context, scheme: String, data: Map<String, String>, delayMs: Long, key: String) {
+    cancelLater(key)
+    val app = context.applicationContext
+    val post = Runnable {
+      synchronized(this) { pendingLocal.remove(key) }
+      receiveLocal(app, scheme, data)
+    }
+    pendingLocal[key] = post
+    delayed.postDelayed(post, delayMs)
+  }
+
+  @Synchronized
+  fun cancelLater(key: String) {
+    pendingLocal.remove(key)?.let { delayed.removeCallbacks(it) }
   }
 
   @Volatile private var threadOnScreen: String? = null

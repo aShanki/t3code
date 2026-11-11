@@ -19,6 +19,7 @@ export const WORKSPACE_TAB_LABELS = {
 };
 
 export const NAVIGATION_TAB_ICONS = {
+  chat: "bubble.left.and.bubble.right",
   threads: "text.bubble",
   pullRequests: PullRequestGlyph.pullRequest,
   usage: "chart.bar.xaxis",
@@ -29,7 +30,9 @@ export function useNavigationTabOrder() {
   const saved = AsyncResult.isSuccess(preferences)
     ? preferences.value.navigationTabOrder
     : undefined;
-  return resolveWorkspaceTabOrder(saved);
+  const order = resolveWorkspaceTabOrder(saved);
+  // The Chat tab ships in the Android fork only.
+  return Platform.OS === "android" ? order : order.filter((tab) => tab !== "chat");
 }
 
 export function useHiddenNavigationTabs() {

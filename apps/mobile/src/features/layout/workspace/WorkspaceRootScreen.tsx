@@ -21,6 +21,7 @@ import {
   useNativeLayoutMetrics,
 } from "../../../native/native-layout-metrics";
 import { HomeRouteScreen } from "../../home/HomeRouteScreen";
+import { ChatTabScreen } from "../../assistant-chat/ChatTabScreen";
 import { WorkspaceConnectionTitle } from "../../home/WorkspaceConnectionTitle";
 import { useAdaptiveWorkspaceLayout } from "../AdaptiveWorkspaceLayout";
 import { PullRequestsScreen } from "../../pull-requests/PullRequestsScreen";
@@ -157,6 +158,8 @@ function WorkspaceRootContent() {
             <HomeRouteScreen />
           ) : state.selectedTab === "pullRequests" ? (
             <PullRequestsScreen />
+          ) : state.selectedTab === "chat" ? (
+            <ChatTabScreen />
           ) : (
             <WorkspaceExtraTab tab={state.selectedTab} />
           )}

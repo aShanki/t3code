@@ -126,7 +126,7 @@ class T3WorkspaceNavigationView(
   private val onTabSelected by EventDispatcher()
   private val onNewThread by EventDispatcher()
   private val onOverlayChange by EventDispatcher()
-  var tabs by mutableStateOf(listOf("threads", "pullRequests", "usage", "settings"))
+  var tabs by mutableStateOf(listOf("chat", "threads", "pullRequests", "usage", "settings"))
   var selectedTab by mutableStateOf("threads")
   var rail by mutableStateOf(false)
   var floating by mutableStateOf(false)
@@ -413,7 +413,9 @@ class T3WorkspaceNavigationView(
   }
 
   private fun tabTitle(tab: String) = when (tab) {
-    "threads" -> "Chats"
+    "chat" -> "Chat"
+    // "Threads" keeps the assistant's Chat tab distinguishable from the thread list.
+    "threads" -> "Threads"
     "pullRequests" -> "Pulls"
     "usage" -> "Usage"
     else -> "Settings"
@@ -425,6 +427,7 @@ class T3WorkspaceNavigationView(
   @Composable
   private fun tabIconPainter(tab: String) = painterResource(
     when (tab) {
+      "chat" -> R.drawable.t3_assistant_chat
       "threads" -> R.drawable.t3_chats
       "pullRequests" -> R.drawable.t3_pull_requests
       "usage" -> R.drawable.t3_usage

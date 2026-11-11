@@ -87,6 +87,21 @@ const ThreadProject = Schema.Struct({
   projectId: Schema.NonEmptyString,
 });
 const isThreadProject = Schema.is(ThreadProject);
+/** The thread the Chat tab shows; the primer is the instruction message that started it. */
+const AssistantChat = Schema.Struct({
+  environmentId: Schema.NonEmptyString,
+  threadId: Schema.NonEmptyString,
+  primerMessageId: Schema.optional(Schema.NonEmptyString),
+});
+export type AssistantChat = typeof AssistantChat.Type;
+const isAssistantChat = Schema.is(AssistantChat);
+/** The Chat tab backed by the owner's Rajesh personal chat, through a Rajesh Code gateway. */
+const RajeshChat = Schema.Struct({
+  baseUrl: Schema.NonEmptyString,
+  taskKey: Schema.NonEmptyString,
+});
+export type RajeshChat = typeof RajeshChat.Type;
+const isRajeshChat = Schema.is(RajeshChat);
 
 export interface Preferences {
   readonly navigationTabOrder?: readonly string[];
@@ -120,6 +135,10 @@ export interface Preferences {
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
+  readonly assistantChat?: AssistantChat | undefined;
+  readonly rajeshChat?: RajeshChat | undefined;
+  /** Personal forks: alerts raised on this device from its environment connections. */
+  readonly localAgentAlertsEnabled?: boolean;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -204,6 +223,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
+    assistantChat?: AssistantChat;
+    rajeshChat?: RajeshChat;
+    localAgentAlertsEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -332,6 +354,15 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.useLastProjectForNewThreads === "boolean") {
     preferences.useLastProjectForNewThreads = parsed.useLastProjectForNewThreads;
+  }
+  if (typeof parsed.localAgentAlertsEnabled === "boolean") {
+    preferences.localAgentAlertsEnabled = parsed.localAgentAlertsEnabled;
+  }
+  if (isRajeshChat(parsed.rajeshChat)) {
+    preferences.rajeshChat = parsed.rajeshChat;
+  }
+  if (isAssistantChat(parsed.assistantChat)) {
+    preferences.assistantChat = parsed.assistantChat;
   }
   if (isThreadProject(parsed.lastThreadProject)) {
     preferences.lastThreadProject = parsed.lastThreadProject;

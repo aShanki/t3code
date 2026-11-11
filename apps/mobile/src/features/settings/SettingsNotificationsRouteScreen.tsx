@@ -48,6 +48,8 @@ import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { LocalNotificationsSettings } from "./LocalNotificationsSettings";
+import { isPersonalFork } from "../../lib/personalFork";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
 
 /**
@@ -109,6 +111,7 @@ function useDeviceRegistered(): boolean {
 }
 
 export function SettingsNotificationsRouteScreen() {
+  if (isPersonalFork) return <LocalNotificationsSettings />;
   if (!hasCloudPublicConfig()) {
     return (
       <SettingsScreen title="Notifications">

@@ -33,6 +33,7 @@ vi.mock("../../connection/catalog", () => ({
 }));
 
 vi.mock("./cloud-drafts", () => ({ removeCloudEnvironments: {} }));
+vi.mock("../../lib/personalFork", () => ({ isPersonalFork: false }));
 vi.mock("./connectOnboarding", () => ({
   clearConnectOnboardingRequest: vi.fn(),
   requestConnectOnboarding: vi.fn(),

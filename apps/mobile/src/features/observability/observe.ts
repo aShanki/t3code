@@ -5,7 +5,11 @@ import { Observe } from "expo-observe";
 const relayUrl: unknown = Constants.expoConfig?.extra?.relay?.url;
 const appVariant: unknown = Constants.expoConfig?.extra?.appVariant;
 
-export const crashReportingAvailable = typeof relayUrl === "string" && relayUrl.trim() !== "";
+// A personal fork's reports would land in T3's own crash data.
+export const crashReportingAvailable =
+  typeof relayUrl === "string" &&
+  relayUrl.trim() !== "" &&
+  Constants.expoConfig?.extra?.personalFork !== true;
 
 interface PromiseRejectionTracker {
   readonly enablePromiseRejectionTracker?: (options: {

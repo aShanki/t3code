@@ -43,6 +43,7 @@ export function initialWorkspaceTabsState(): WorkspaceTabsState {
     selectedTab: "threads",
     selectionRevision: 0,
     tabs: {
+      chat: emptyTab(),
       threads: emptyTab(),
       pullRequests: emptyTab(),
       usage: emptyTab(),

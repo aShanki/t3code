@@ -33,6 +33,16 @@ import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilt
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { filterSettingsSections } from "./settings-search";
 import { usePaneRole } from "../../components/ui/Pane";
+import { isPersonalFork } from "../../lib/personalFork";
+import { useRajeshChat, useSetRajeshChat } from "../assistant-chat/assistant-chat-state";
+import {
+  logoutRajesh,
+  readRajeshToken,
+  writeRajeshToken,
+} from "../assistant-chat/rajesh/rajesh-gateway";
+import { resetRajeshDeviceKey } from "../assistant-chat/rajesh/rajesh-device-key";
+import * as Dialog from "../../components/ui/Dialog";
+import { checkRajeshUpdate, isRajeshUpdater } from "../updates/rajesh-updates";
 
 export function SettingsRouteScreen() {
   const list = useSettingsListPlacement();
@@ -130,12 +140,7 @@ function ConfiguredSettingsRouteScreen() {
           onPress: () => navigation.navigate("SettingsAuth"),
         },
         environmentsRow(Object.keys(savedConnectionsById).length),
-        {
-          id: "SettingsNotifications",
-          icon: "bell.badge",
-          label: "Notifications",
-          target: "SettingsNotifications",
-        },
+        notificationsRow,
       ]}
     />
   );
@@ -143,8 +148,22 @@ function ConfiguredSettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   const { savedConnectionsById } = useSavedRemoteConnections();
-  return <SettingsList connections={[environmentsRow(Object.keys(savedConnectionsById).length)]} />;
+  return (
+    <SettingsList
+      connections={[
+        environmentsRow(Object.keys(savedConnectionsById).length),
+        ...(isPersonalFork ? [notificationsRow] : []),
+      ]}
+    />
+  );
 }
+
+const notificationsRow: SettingsListRow = {
+  id: "SettingsNotifications",
+  icon: "bell.badge",
+  label: "Notifications",
+  target: "SettingsNotifications",
+};
 
 function environmentsRow(count: number): SettingsListRow {
   return {
@@ -158,6 +177,8 @@ function environmentsRow(count: number): SettingsListRow {
 }
 
 function SettingsList(props: { readonly connections: readonly SettingsListRow[] }) {
+  const rajesh = useRajeshChat();
+  const setRajesh = useSetRajeshChat();
   // UIKit's scroll-edge material takes the scroll view's own color; like the chat list, match
   // the sidebar's surface so the bar doesn't darken over content at rest.
   // Grouped cards only lift off the screen surface; the drawer is as dark as they are.
@@ -170,7 +191,53 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
   const overflowRows = useOverflowRows();
   const indexSections = useSettingsIndexSections();
   const sections = filterSettingsSections(
-    [{ rows: overflowRows }, { title: "Connections", rows: props.connections }, ...indexSections],
+    [
+      { rows: overflowRows },
+      {
+        title: "Connections",
+        rows: [
+          ...props.connections,
+          ...(isRajeshUpdater
+            ? [
+                {
+                  id: "rajesh-updates",
+                  icon: "arrow.clockwise" as const,
+                  label: "Check for app updates",
+                  onPress: () => void checkRajeshUpdate(true),
+                },
+              ]
+            : []),
+          ...(rajesh
+            ? [
+                {
+                  id: "disconnect-rajesh",
+                  icon: "person.crop.circle" as const,
+                  label: "Disconnect Rajesh",
+                  onPress: () =>
+                    Dialog.confirm({
+                      title: "Disconnect Rajesh?",
+                      message: "This device's session is revoked. Your chat continues in Discord.",
+                      confirmText: "Disconnect",
+                      destructive: true,
+                      onConfirm: () => {
+                        void readRajeshToken(rajesh.baseUrl)
+                          .then((token) =>
+                            token ? logoutRajesh(rajesh.baseUrl, token) : undefined,
+                          )
+                          .catch(() => undefined)
+                          .then(() => resetRajeshDeviceKey(rajesh.baseUrl))
+                          .catch(() => undefined);
+                        void writeRajeshToken(rajesh.baseUrl, null);
+                        setRajesh(undefined);
+                      },
+                    }),
+                },
+              ]
+            : []),
+        ],
+      },
+      ...indexSections,
+    ],
     query,
   );
 

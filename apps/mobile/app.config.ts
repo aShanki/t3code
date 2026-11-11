@@ -19,11 +19,19 @@ const runtimeVersionPolicy =
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
+// A personal fork installs beside the store app under its own name, scheme and Android id.
+const forkAndroidPackage = repoEnv.T3CODE_FORK_ANDROID_PACKAGE?.trim();
+const isRajeshChat = forkAndroidPackage === "tech.ashank.t3code.chat";
+// Android only installs an update whose version code is higher than the installed one.
+const forkAndroidVersionCode = Number(repoEnv.T3CODE_FORK_ANDROID_VERSION_CODE);
+
 // Compiled into the native project. Without a relay, Observe's native side could dispatch to
 // Expo's own ingest before observe.ts turns it off; `.invalid` never resolves (RFC 6761).
-const observeEndpointUrl = repoEnv.T3CODE_RELAY_URL?.trim()
-  ? new URL("/v1/mobile/observe", repoEnv.T3CODE_RELAY_URL.trim()).toString()
-  : "https://observe.invalid";
+// A fork keeps its crash reports out of T3's relay.
+const observeEndpointUrl =
+  repoEnv.T3CODE_RELAY_URL?.trim() && !forkAndroidPackage
+    ? new URL("/v1/mobile/observe", repoEnv.T3CODE_RELAY_URL.trim()).toString()
+    : "https://observe.invalid";
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
 const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
@@ -117,7 +125,16 @@ function resolveAppVariant(value: string | undefined): AppVariant {
   }
 }
 
-const variant = VARIANT_CONFIG[APP_VARIANT];
+const variant = forkAndroidPackage
+  ? {
+      ...VARIANT_CONFIG[APP_VARIANT],
+      appName: isRajeshChat
+        ? "Rajesh chat"
+        : repoEnv.T3CODE_FORK_APP_NAME?.trim() || "T3 Code Fork",
+      scheme: repoEnv.T3CODE_FORK_SCHEME?.trim() || "t3code-fork",
+      androidPackage: forkAndroidPackage,
+    }
+  : VARIANT_CONFIG[APP_VARIANT];
 // Copied thread links open the app. app.t3.codes/.well-known lists every variant's identifiers.
 const HOSTED_APP_HOST = "app.t3.codes";
 const iosBundleIdentifier = isIosPersonalTeamBuild
@@ -295,18 +312,23 @@ const config: ExpoConfig = {
     },
   },
   android: {
-    icon: variant.assets.appIcon,
+    icon: isRajeshChat ? "./assets/rajesh-chat-icon.png" : variant.assets.appIcon,
     package: variant.androidPackage,
+    ...(forkAndroidPackage && Number.isSafeInteger(forkAndroidVersionCode)
+      ? { versionCode: forkAndroidVersionCode }
+      : {}),
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
       ? { googleServicesFile: repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE }
       : {}),
     adaptiveIcon: {
-      backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
-      ...(variant.assets.androidAdaptiveBackgroundImage
+      backgroundColor: isRajeshChat ? "#000000" : variant.assets.androidAdaptiveBackgroundColor,
+      ...(!isRajeshChat && variant.assets.androidAdaptiveBackgroundImage
         ? { backgroundImage: variant.assets.androidAdaptiveBackgroundImage }
         : {}),
-      foregroundImage: variant.assets.androidAdaptiveForeground,
-      monochromeImage: variant.assets.androidMonochromeIcon,
+      foregroundImage: isRajeshChat
+        ? "./assets/rajesh-chat-icon.png"
+        : variant.assets.androidAdaptiveForeground,
+      ...(isRajeshChat ? {} : { monochromeImage: variant.assets.androidMonochromeIcon }),
     },
     // JS back dispatch needs RN's Android 16 shim and withAndroidPredictiveBackCompat on Android 13-15.
     predictiveBackGestureEnabled: true,
@@ -468,6 +490,7 @@ const config: ExpoConfig = {
       process.env.T3CODE_FEATURE_SECRETS?.trim().toLowerCase() ?? "",
     ),
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
+    personalFork: Boolean(forkAndroidPackage),
     relay: {
       url: repoEnv.T3CODE_RELAY_URL ?? null,
     },

@@ -35,8 +35,9 @@ import { useWorkspaceBackNavigation } from "../layout/workspace/useAndroidWorksp
 
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 import { NewTaskDraftScreen } from "./NewTaskDraftScreen";
+import { useRememberAssistantChat } from "../assistant-chat/assistant-chat-state";
 
-import type { NewTaskDraftRouteParams } from "./thread-route-state";
+import { threadReturnTab, type NewTaskDraftRouteParams } from "./thread-route-state";
 export type { NewTaskDraftRouteParams } from "./thread-route-state";
 
 const branchCheckouts = makeNewTaskBranchCheckouts({
@@ -90,7 +91,7 @@ const idleBranchCheckoutAtom = Atom.make(AsyncResult.initial<BranchCheckoutResul
 
 export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraftRouteParams>) {
   const currentRoute = useRoute();
-  const goBack = useWorkspaceBackNavigation("threads");
+  const goBack = useWorkspaceBackNavigation(threadReturnTab(currentRoute.params));
   const params = route.params ?? {};
   const draftId = Array.isArray(params.draftId) ? params.draftId[0] : params.draftId;
   const projects = useProjects();
@@ -195,6 +196,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
     cloning,
   };
   const preparingBranch = checkoutPending || (needsPreparation && result?._tag !== "Success");
+  const rememberAssistantChat = useRememberAssistantChat();
 
   return (
     <>
@@ -213,6 +215,7 @@ export function NewTaskDraftRouteScreen({ route }: StaticScreenProps<NewTaskDraf
               : params.incomingShareId
           }
           draftId={draftId}
+          onQueued={params.purpose === "assistant-chat" ? rememberAssistantChat : undefined}
         />
       )}
     </>

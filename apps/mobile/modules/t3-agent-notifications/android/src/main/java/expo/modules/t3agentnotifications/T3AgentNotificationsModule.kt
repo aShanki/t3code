@@ -30,6 +30,32 @@ class T3AgentNotificationsModule : Module() {
       appContext.reactContext?.let { AgentNotifications.showcase(it, scheme, data) }
     }
 
+    // Local alerts render through the same path as relay pushes.
+    Function("receiveLocal") { scheme: String, data: Map<String, String> ->
+      appContext.reactContext?.let { AgentNotifications.receiveLocal(it, scheme, data) }
+    }
+
+    Function("receiveLocalLater") {
+        scheme: String,
+        data: Map<String, String>,
+        delayMs: Double,
+        key: String
+      ->
+      appContext.reactContext?.let {
+        AgentNotifications.receiveLater(it, scheme, data, delayMs.toLong(), key)
+      }
+    }
+
+    Function("cancelLocalLater") { key: String ->
+      AgentNotifications.cancelLater(key)
+    }
+
+    Function("setBackgroundConnection") { enabled: Boolean, text: String ->
+      appContext.reactContext?.let {
+        if (enabled) AgentConnectionService.start(it, text) else AgentConnectionService.stop(it)
+      }
+    }
+
     Function("setThreadOnScreen") { path: String? ->
       AgentNotifications.setThreadOnScreen(path)
     }

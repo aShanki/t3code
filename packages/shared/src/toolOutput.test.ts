@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   compactDynamicToolOutput,
+  createdThreadIdsFromToolItem,
   MAX_TOOL_OUTPUT_IMAGES,
   mcpToolResultOutput,
   toolOutputImages,
@@ -137,6 +138,47 @@ describe("compactDynamicToolOutput", () => {
     expect(compactDynamicToolOutput({ threadId: "known", body: "x".repeat(1_000_000) })).toEqual({
       threadId: "known",
     });
+  });
+});
+
+describe("createdThreadIdsFromToolItem", () => {
+  const launched = JSON.stringify({ threadId: "thread-1", link: "https://example/t/1" });
+
+  it("reads launched and batch-created threads from raw and wire-compacted output", () => {
+    for (const output of [[{ type: "text", text: launched }], compactDynamicToolOutput(launched)]) {
+      expect(
+        createdThreadIdsFromToolItem({ toolName: "mcp__t3-code__t3_thread_launch", output }),
+      ).toEqual(["thread-1"]);
+    }
+    const batch = {
+      threads: [
+        { threadId: "thread-2" },
+        { threadId: "thread-3", status: "rolled_back" },
+        { threadId: "thread-4" },
+      ],
+    };
+    expect(
+      createdThreadIdsFromToolItem({ toolName: "t3-code.create_threads", output: batch }),
+    ).toEqual(["thread-2", "thread-4"]);
+  });
+
+  it("ignores failures, rollbacks, and tools that do not create threads", () => {
+    expect(
+      createdThreadIdsFromToolItem({
+        toolName: "t3_thread_launch",
+        output: { isError: true, content: [{ type: "text", text: launched }] },
+      }),
+    ).toEqual([]);
+    expect(
+      createdThreadIdsFromToolItem({
+        toolName: "t3_thread_launch",
+        output: { threadId: "thread-1", status: "rolled_back" },
+      }),
+    ).toEqual([]);
+    expect(createdThreadIdsFromToolItem({ toolName: "t3_thread_read", output: launched })).toEqual(
+      [],
+    );
+    expect(createdThreadIdsFromToolItem({ toolName: "t3_thread_launch" })).toEqual([]);
   });
 });
 

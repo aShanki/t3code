@@ -8,6 +8,8 @@ export type NewTaskDraftRouteParams = {
   readonly cloning?: string | string[];
   readonly draftId?: string | string[];
   readonly incomingShareId?: string | string[];
+  /** Submitting makes the new thread the Chat tab's assistant. */
+  readonly purpose?: "assistant-chat";
 };
 
 export function isDraftThreadRoute(
@@ -21,6 +23,13 @@ export function isDraftThreadRoute(
   return (
     route?.name === "Thread" && Boolean((route.params as { draft?: unknown } | undefined)?.draft)
   );
+}
+
+/** The workspace tab a thread returns to: Chat when opened from it, else Threads. */
+export function threadReturnTab(params: object | undefined): "chat" | "threads" {
+  return params !== undefined && "returnTab" in params && params.returnTab === "chat"
+    ? "chat"
+    : "threads";
 }
 
 export function submittedThreadParams(environmentId: string, threadId: string) {
