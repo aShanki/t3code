@@ -3,6 +3,7 @@ import {
   AppState,
   FlatList,
   Image,
+  Keyboard,
   Linking,
   Pressable,
   ScrollView,
@@ -501,7 +502,11 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const startReply = (message: string) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     setReplyTo(message);
-    input.current?.focus();
+    const field = input.current;
+    // The field keeps focus when the keyboard is dismissed, and focusing a focused field does
+    // nothing; letting go of it first is what brings the keyboard back.
+    if (field?.isFocused() && !Keyboard.isVisible()) field.blur();
+    field?.focus();
   };
   const attach = () =>
     void pickRajeshFile()
