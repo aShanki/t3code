@@ -26,7 +26,7 @@ tag="rajesh-chat-v$version_code"
 commit="$(git -C "$root" rev-parse HEAD)"
 if [[ -n "$publish" ]]; then
   [[ -z "$(git -C "$root" status --porcelain)" ]] || { echo "commit or stash changes before publishing" >&2; exit 1; }
-  git -C "$root" ls-remote --exit-code "https://github.com/$REPOSITORY.git" | grep -q "^$commit" ||
+  grep -q "^$commit" <<<"$(git -C "$root" ls-remote "https://github.com/$REPOSITORY.git")" ||
     { echo "push $commit to $REPOSITORY before publishing" >&2; exit 1; }
 fi
 
@@ -47,9 +47,12 @@ apk="$out/rajesh-chat-arm64.apk"
 "$RAJESH_CHAT_SIGN" "$out/app-release.apk" "$apk"
 
 build_tools="$(find "$ANDROID_HOME/build-tools/" -mindepth 1 -maxdepth 1 | sort -V | tail -1)"
-"$build_tools/apksigner" verify --print-certs "$apk" | grep -q "certificate SHA-256 digest: $CERTIFICATE" ||
+# Captured first: with pipefail, a grep that stops reading early fails the pipeline.
+certificates="$("$build_tools/apksigner" verify --print-certs "$apk")"
+badging="$("$build_tools/aapt2" dump badging "$apk")"
+grep -q "certificate SHA-256 digest: $CERTIFICATE" <<<"$certificates" ||
   { echo "the APK is not signed with the release certificate" >&2; exit 1; }
-"$build_tools/aapt2" dump badging "$apk" | grep -q "package: name='$T3CODE_FORK_ANDROID_PACKAGE' versionCode='$version_code'" ||
+grep -q "package: name='$T3CODE_FORK_ANDROID_PACKAGE' versionCode='$version_code'" <<<"$badging" ||
   { echo "the APK does not carry version code $version_code" >&2; exit 1; }
 sha256sum "$apk"
 
