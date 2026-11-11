@@ -1,0 +1,66 @@
+name: Track upstream stable
+
+# Fails while the newest stable upstream release is not merged into this fork, and reports whether
+# it merges cleanly and passes the mobile checks. It publishes nothing: a release is built and
+# signed off GitHub with scripts/rajesh-chat-release.sh, because the signing key never leaves
+# the owner's machine.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.repository == 'aShanki/t3code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Find the newest stable upstream release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release="$(gh api repos/pingdotgg/t3code/releases/latest)"
+          tag="$(jq -r '.tag_name' <<<"$release")"
+          [[ "$(jq -r '.draft or .prerelease' <<<"$release")" == false ]]
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch --no-tags https://github.com/pingdotgg/t3code.git "refs/tags/$tag:refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$tag" HEAD; then
+            echo "This fork already includes upstream $tag." >> "$GITHUB_STEP_SUMMARY"
+            echo 'behind=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'behind=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Try the merge
+        if: steps.upstream.outputs.behind == 'true'
+        env:
+          STABLE_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-edit --no-ff "$STABLE_TAG"
+      - name: Install dependencies
+        if: steps.upstream.outputs.behind == 'true'
+        uses: ./.github/actions/setup-ci-deps
+      - name: Check the merged mobile app
+        if: steps.upstream.outputs.behind == 'true'
+        run: |
+          vp run --filter @t3tools/mobile typecheck
+          vp test run apps/mobile/src/features/assistant-chat apps/mobile/src/features/updates
+      - name: Report the pending release
+        if: steps.upstream.outputs.behind == 'true'
+        env:
+          STABLE_TAG: ${{ steps.upstream.outputs.tag }}
+        run: |
+          echo "Upstream $STABLE_TAG merges cleanly and passes the mobile checks, but is not merged yet." >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Upstream $STABLE_TAG is not merged into this fork yet."
+          exit 1
