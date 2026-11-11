@@ -41,7 +41,9 @@ export T3CODE_MOBILE_UPDATES_ENABLED=0
 
 cd "$root/apps/mobile"
 node_modules/.bin/expo prebuild --clean --platform android
-(cd android && ./gradlew assembleRelease "-PreactNativeArchitectures=${RAJESH_CHAT_ABIS:-arm64-v8a,x86_64}")
+# Legacy packaging compresses the native libraries, which halves the download.
+(cd android && ./gradlew assembleRelease "-PreactNativeArchitectures=${RAJESH_CHAT_ABIS:-arm64-v8a,x86_64}" \
+  -Pexpo.useLegacyPackaging=true)
 
 out="$root/apps/mobile/android/app/build/outputs/apk/release"
 # Installed apps look for this exact asset name, whichever ABIs the build holds.
