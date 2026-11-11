@@ -18,10 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      - name: Check out the public fork
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin https://github.com/aShanki/t3code.git
+          git fetch --no-tags origin "$COMMIT"
+          git checkout --detach FETCH_HEAD
       - name: Find the newest stable upstream release
         id: upstream
         env:
