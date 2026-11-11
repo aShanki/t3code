@@ -527,6 +527,8 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const [pending, setPending] = useState<ReadonlyArray<PendingSend>>([]);
   const navigation = useNavigation();
   const list = useRef<FlatList<{ readonly row: TimelineRow; readonly space: number }>>(null);
+  /** Set by a send; scrolling before the bubble is laid out would be undone by the list. */
+  const followSend = useRef(false);
   /** Set while scrolled away from the latest message: the newest message seen before leaving. */
   const [awayFrom, setAwayFrom] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<{
@@ -567,7 +569,8 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     setText("");
     setFile(null);
     setReplyTo(null);
-    scrollToLatest();
+    // The new bubble is laid out first; the list then scrolls to it (see onContentSizeChange).
+    followSend.current = true;
     void deliver(send);
   };
   const scrollToLatest = () => list.current?.scrollToOffset({ offset: 0, animated: true });
@@ -769,6 +772,11 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
             // Reading older messages, new ones arrive below without moving the page; at the latest
             // message the list follows them.
             maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 48 }}
+            onContentSizeChange={() => {
+              if (!followSend.current) return;
+              followSend.current = false;
+              scrollToLatest();
+            }}
             scrollEventThrottle={100}
             onScroll={(event) => {
               const away = event.nativeEvent.contentOffset.y > 240;
