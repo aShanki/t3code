@@ -35,6 +35,13 @@ object RajeshUpdate {
   fun installedVersion(context: Context): Int =
     context.packageManager.getPackageInfo(context.packageName, 0).versionCode
 
+  private fun downloads(context: Context) = File(context.cacheDir, "rajesh-updates")
+
+  /** Removes the downloaded release, which Android leaves in place after installing it. */
+  fun clearDownload(context: Context) {
+    downloads(context).deleteRecursively()
+  }
+
   fun install(context: Context, sha256: String, versionCode: Int) {
     require(context.packageName == PACKAGE) { "Updates are unavailable for this app." }
     require(versionCode > installedVersion(context)) { "This update is not newer than the installed app." }
@@ -47,7 +54,7 @@ object RajeshUpdate {
       )
       error("Allow Rajesh chat to install apps, then check for updates again.")
     }
-    val directory = File(context.cacheDir, "rajesh-updates")
+    val directory = downloads(context)
     check(directory.exists() || directory.mkdirs()) { "Cannot create the update folder." }
     val file = File(directory, "update.apk")
     try {

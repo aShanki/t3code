@@ -34,6 +34,23 @@ describe("Rajesh transcript", () => {
       ["message", "Here is the result"],
     ]);
   });
+  it("shows a sent file by name instead of the gateway's upload path", () => {
+    const entries = buildRajeshChatEntries(
+      [
+        message("a", 1, "Look at this\n[User attachment: /srv/uploads/ab12/site_plan.pdf]"),
+        message("b", 2, "\n[User attachment: /srv/uploads/cd34/photo.jpg]"),
+        message("c", 3, "[User attachment: /srv/uploads/ef56/notes.txt]", true),
+      ],
+      [],
+    );
+    expect(
+      entries.map((entry) => (entry.kind === "message" ? [entry.text, entry.files] : entry.kind)),
+    ).toEqual([
+      ["Look at this", ["site_plan.pdf"]],
+      ["", ["photo.jpg"]],
+      ["[User attachment: /srv/uploads/ef56/notes.txt]", []],
+    ]);
+  });
   it("merges updates by id in gateway order and advances the cursor", () => {
     const known = [message("discord:personal:1", 10, "Plan my day")];
     const merged = mergeRajeshMessages(known, [
@@ -77,20 +94,36 @@ describe("Rajesh chat rows", () => {
   it("separates days and long gaps, and names Rajesh once per run of replies", () => {
     const rows = buildRajeshChatRows(
       [
-        { kind: "message", id: "a", role: "user", text: "hi", time: at("2026-11-10T18:10:00") },
+        {
+          kind: "message",
+          id: "a",
+          role: "user",
+          text: "hi",
+          files: [],
+          time: at("2026-11-10T18:10:00"),
+        },
         {
           kind: "message",
           id: "b",
           role: "assistant",
           text: "hello",
+          files: [],
           time: at("2026-11-10T18:11:00"),
         },
-        { kind: "message", id: "c", role: "user", text: "plan", time: at("2026-11-11T09:41:00") },
+        {
+          kind: "message",
+          id: "c",
+          role: "user",
+          text: "plan",
+          files: [],
+          time: at("2026-11-11T09:41:00"),
+        },
         {
           kind: "message",
           id: "d",
           role: "assistant",
           text: "one",
+          files: [],
           time: at("2026-11-11T09:42:00"),
         },
         {
@@ -105,6 +138,7 @@ describe("Rajesh chat rows", () => {
           id: "e",
           role: "assistant",
           text: "two",
+          files: [],
           time: at("2026-11-11T09:43:00"),
         },
         {
@@ -112,6 +146,7 @@ describe("Rajesh chat rows", () => {
           id: "f",
           role: "assistant",
           text: "later",
+          files: [],
           time: at("2026-11-11T10:30:00"),
         },
       ],

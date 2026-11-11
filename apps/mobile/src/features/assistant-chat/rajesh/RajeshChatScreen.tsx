@@ -32,13 +32,16 @@ import {
   startRajeshDevice,
   writeRajeshToken,
   type RajeshDeviceLogin,
+  type RajeshFile,
 } from "./rajesh-gateway";
+import { pickRajeshFile } from "./rajesh-attachment";
 import { resetRajeshDeviceKey } from "./rajesh-device-key";
 import {
   buildRajeshChatEntries,
   buildRajeshChatRows,
   mergeRajeshMessages,
   rajeshCursor,
+  rajeshUserContent,
   type RajeshChatRow,
   type RajeshMessage,
   type RajeshT3Thread,
@@ -386,6 +389,7 @@ function useRajeshFeed(chat: RajeshChat, token: string | null) {
 interface PendingSend {
   readonly requestId: string;
   readonly text: string;
+  readonly file: RajeshFile | null;
   readonly sentAt: number;
   /** Set once retries stop; the bubble then offers a manual retry. */
   readonly error: string | null;
@@ -401,7 +405,14 @@ async function sendWithRetry(
 ): Promise<string | null> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await sendRajeshMessage(chat.baseUrl, token, chat.taskKey, send.requestId, send.text);
+      await sendRajeshMessage(
+        chat.baseUrl,
+        token,
+        chat.taskKey,
+        send.requestId,
+        send.text,
+        send.file ?? undefined,
+      );
       return null;
     } catch (error) {
       const status = rajeshErrorStatus(error);
@@ -423,6 +434,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const styles = useMarkdownStyles();
   const [token, setToken] = useState<string | null | undefined>(undefined);
   const [text, setText] = useState("");
+  const [file, setFile] = useState<RajeshFile | null>(null);
   const [pending, setPending] = useState<ReadonlyArray<PendingSend>>([]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the session token from secure storage once per gateway
@@ -448,12 +460,24 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   };
   const submit = () => {
     const message = text.trim();
-    if (message === "" || !token) return;
-    const send = { requestId: uuidv4(), text: message, sentAt: Date.now(), error: null };
+    if ((message === "" && file === null) || !token) return;
+    const send = { requestId: uuidv4(), text: message, file, sentAt: Date.now(), error: null };
     setPending((all) => [...all, send]);
     setText("");
+    setFile(null);
     void deliver(send);
   };
+  const attach = () =>
+    void pickRajeshFile()
+      .then((picked) => {
+        if (picked !== null) setFile(picked);
+      })
+      .catch((error: unknown) =>
+        Dialog.alert(
+          "Could not attach file",
+          error instanceof Error ? error.message : "Try another file.",
+        ),
+      );
 
   if (token === undefined) {
     return <View className="flex-1 bg-screen" />;
@@ -493,10 +517,11 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   // A sent message stays as a local bubble until Rajesh records it.
   const outstanding = pending.filter(
     (send) =>
-      !feed.messages.some(
-        (message) =>
-          !message.bot && message.time >= send.sentAt - 60_000 && message.text.trim() === send.text,
-      ),
+      !feed.messages.some((message) => {
+        if (message.bot || message.time < send.sentAt - 60_000) return false;
+        const recorded = rajeshUserContent(message);
+        return recorded.text === send.text && recorded.files.length === (send.file ? 1 : 0);
+      }),
   );
   const timeline: ReadonlyArray<TimelineRow> = [
     ...rows,
@@ -513,7 +538,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     if (link?.environmentId) openThread(link.environmentId, link.threadId);
     else if (/^https?:\/\//i.test(href)) void Linking.openURL(href).catch(() => undefined);
   };
-  const canSend = text.trim() !== "";
+  const canSend = text.trim() !== "" || file !== null;
 
   return (
     <KeyboardAvoidingView
@@ -555,10 +580,13 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                 <RajeshActivity text={row.text} />
               ) : row.kind === "pending" ? (
                 <View className="max-w-[85%] self-end">
-                  <View className="rounded-[20px] bg-user-bubble px-3.5 py-3">
-                    <Text selectable className="text-base leading-6 text-user-bubble-foreground">
-                      {row.send.text}
-                    </Text>
+                  <View className="gap-2 rounded-[20px] bg-user-bubble px-3.5 py-3">
+                    {row.send.text === "" ? null : (
+                      <Text selectable className="text-base leading-6 text-user-bubble-foreground">
+                        {row.send.text}
+                      </Text>
+                    )}
+                    {row.send.file ? <SentFile name={row.send.file.name} /> : null}
                   </View>
                   {row.send.error !== null ? (
                     <Pressable
@@ -605,12 +633,17 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                   />
                 </View>
               ) : (
-                <View className="max-w-[85%] self-end rounded-[20px] bg-user-bubble px-3.5 py-3">
-                  <SelectableMarkdownText
-                    markdown={row.text}
-                    textStyle={styles.user.nativeTextStyle}
-                    onLinkPress={onLinkPress}
-                  />
+                <View className="max-w-[85%] gap-2 self-end rounded-[20px] bg-user-bubble px-3.5 py-3">
+                  {row.text === "" ? null : (
+                    <SelectableMarkdownText
+                      markdown={row.text}
+                      textStyle={styles.user.nativeTextStyle}
+                      onLinkPress={onLinkPress}
+                    />
+                  )}
+                  {row.files.map((name) => (
+                    <SentFile key={name} name={name} />
+                  ))}
                 </View>
               )}
             </View>
@@ -618,15 +651,39 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
         />
       )}
       <View className="bg-screen px-3 pt-2" style={{ paddingBottom: Math.max(insets.bottom, 8) }}>
+        {file ? (
+          <View className="mb-2 flex-row items-center gap-2 self-start rounded-2xl bg-grouped-card py-1 pl-3">
+            <SymbolView
+              name="doc.text"
+              size={16}
+              tintColorClassName="accent-foreground-muted"
+              type="monochrome"
+            />
+            <Text numberOfLines={1} className="max-w-[220px] text-sm leading-5 text-foreground">
+              {file.name}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${file.name}`}
+              onPress={() => setFile(null)}
+              className="h-10 w-10 items-center justify-center"
+            >
+              <SymbolView
+                name="xmark.circle.fill"
+                size={18}
+                tintColorClassName="accent-foreground-muted"
+                type="monochrome"
+              />
+            </Pressable>
+          </View>
+        ) : null}
         <OutlinedInput radius="rounded-3xl">
           {(focus) => (
             <>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Add attachment"
-                onPress={() =>
-                  Dialog.alert("Attachments", "Attachments are not available in Rajesh chat yet.")
-                }
+                onPress={attach}
                 className="h-12 w-12 items-center justify-center"
               >
                 <SymbolView
@@ -674,6 +731,22 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
         </OutlinedInput>
       </View>
     </KeyboardAvoidingView>
+  );
+}
+
+function SentFile({ name }: { readonly name: string }) {
+  return (
+    <View className="flex-row items-center gap-2">
+      <SymbolView
+        name="doc.text"
+        size={16}
+        tintColorClassName="accent-user-bubble-foreground"
+        type="monochrome"
+      />
+      <Text numberOfLines={1} className="shrink text-sm leading-5 text-user-bubble-foreground">
+        {name}
+      </Text>
+    </View>
   );
 }
 

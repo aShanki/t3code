@@ -135,6 +135,13 @@ export const readRajeshT3Threads = (baseUrl: string, token: string, key: string)
     token,
   });
 
+/** A file as the gateway takes it: base64 contents, one per message. */
+export interface RajeshFile {
+  readonly name: string;
+  readonly mime?: string;
+  readonly data: string;
+}
+
 /** Idempotent per request ID: a retry after a lost reply is not sent twice. */
 export const sendRajeshMessage = (
   baseUrl: string,
@@ -142,10 +149,11 @@ export const sendRajeshMessage = (
   key: string,
   requestId: string,
   text: string,
+  file?: RajeshFile,
 ) =>
   call<{ readonly accepted: boolean }>(baseUrl, `${taskPath(key)}/messages`, {
     token,
-    body: { requestId, text },
+    body: { requestId, text, ...(file ? { files: [file] } : {}) },
   });
 
 export const stopRajesh = (baseUrl: string, token: string, key: string, requestId: string) =>

@@ -20,6 +20,10 @@ class T3DeviceKeysModule : Module() {
       RajeshUpdate.installedVersion(requireNotNull(appContext.reactContext))
     }
 
+    AsyncFunction("clearDownload") {
+      RajeshUpdate.clearDownload(requireNotNull(appContext.reactContext))
+    }
+
     // Off the shared module queue: the download would otherwise stall every other async call.
     AsyncFunction("installRelease") Coroutine { sha256: String, versionCode: Int ->
       val context = requireNotNull(appContext.reactContext)

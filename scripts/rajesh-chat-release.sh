@@ -8,7 +8,8 @@
 #   RAJESH_CHAT_SIGN            command run as `$RAJESH_CHAT_SIGN <unsigned.apk> <signed.apk>`
 #   EXPO_PUBLIC_RAJESH_GATEWAY  gateway address built into the app
 #   ANDROID_HOME                Android SDK with build-tools
-#   RAJESH_CHAT_ABIS            optional, defaults to arm64-v8a (add x86_64 for emulator builds)
+#   RAJESH_CHAT_ABIS            optional, defaults to arm64-v8a,x86_64: phones use arm64, and
+#                               x86_64 lets an emulator run a release before a phone installs it
 set -euo pipefail
 
 # SHA-256 of the release signing certificate. Android refuses updates signed by any other key.
@@ -40,9 +41,10 @@ export T3CODE_MOBILE_UPDATES_ENABLED=0
 
 cd "$root/apps/mobile"
 node_modules/.bin/expo prebuild --clean --platform android
-(cd android && ./gradlew assembleRelease "-PreactNativeArchitectures=${RAJESH_CHAT_ABIS:-arm64-v8a}")
+(cd android && ./gradlew assembleRelease "-PreactNativeArchitectures=${RAJESH_CHAT_ABIS:-arm64-v8a,x86_64}")
 
 out="$root/apps/mobile/android/app/build/outputs/apk/release"
+# Installed apps look for this exact asset name, whichever ABIs the build holds.
 apk="$out/rajesh-chat-arm64.apk"
 "$RAJESH_CHAT_SIGN" "$out/app-release.apk" "$apk"
 

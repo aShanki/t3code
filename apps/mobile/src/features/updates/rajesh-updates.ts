@@ -7,6 +7,7 @@ import { parseRajeshRelease } from "./rajesh-release";
 interface NativeUpdater {
   installedVersion(): Promise<number>;
   installRelease(sha256: string, versionCode: number): Promise<void>;
+  clearDownload(): Promise<void>;
 }
 
 const native = requireOptionalNativeModule<NativeUpdater>("T3DeviceKeys");
@@ -34,6 +35,8 @@ export async function checkRajeshUpdate(manual = false): Promise<void> {
     if (!response.ok) throw new Error(`Update check failed (${response.status}).`);
     const release = parseRajeshRelease(await response.json(), currentVersion);
     if (!release) {
+      // Nothing newer is waiting to be installed, so the last download is spent.
+      void native.clearDownload().catch(() => undefined);
       if (manual) Dialog.alert("Updates", "No compatible newer release is available.");
       return;
     }

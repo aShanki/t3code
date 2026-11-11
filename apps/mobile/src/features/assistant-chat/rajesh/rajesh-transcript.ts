@@ -28,6 +28,8 @@ export type RajeshChatEntry =
       readonly id: string;
       readonly role: "user" | "assistant";
       readonly text: string;
+      /** Names of the files sent with a user message. */
+      readonly files: ReadonlyArray<string>;
       readonly time: number;
     }
   | {
@@ -67,6 +69,21 @@ const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 // Discord user and role mentions mean nothing outside Discord.
 const readable = (text: string) => text.replace(/<@[!&]?\d+>/g, "").trim();
 
+const USER_FILE = /\n?\[User attachment: ([^\]\n]+)\]/g;
+
+/** A user message without the gateway's upload markers, and the names of the files they mark. */
+export function rajeshUserContent(message: RajeshMessage): {
+  readonly text: string;
+  readonly files: ReadonlyArray<string>;
+} {
+  return {
+    text: readable((message.displayText ?? message.text).replace(USER_FILE, "")),
+    files: [...message.text.matchAll(USER_FILE)].map(
+      (match) => match[1]!.split("/").pop() || "file",
+    ),
+  };
+}
+
 /**
  * The chat as Rajesh's Discord conversation shows it. Each bot reply is stored twice, as its
  * delivery (`out:…`) and as the Discord message that echoes it (possibly split in chunks); only
@@ -88,8 +105,10 @@ export function buildRajeshChatEntries(
   const entries: RajeshChatEntry[] = [];
   for (const message of messages) {
     if (isEcho(message)) continue;
-    const text = readable(message.displayText ?? message.text);
-    if (text === "") continue;
+    const { text, files } = message.bot
+      ? { text: readable(message.displayText ?? message.text), files: [] }
+      : rajeshUserContent(message);
+    if (text === "" && files.length === 0) continue;
     if (message.bot && text === "NO_REPLY") continue;
     if (message.bot && /^(?:🛠️?\s*)?Tool activity\b/.test(text)) {
       entries.push({ kind: "activity", id: message.id, text, time: message.time });
@@ -100,6 +119,7 @@ export function buildRajeshChatEntries(
       id: message.id,
       role: message.bot ? "assistant" : "user",
       text,
+      files,
       time: message.time,
     });
   }
