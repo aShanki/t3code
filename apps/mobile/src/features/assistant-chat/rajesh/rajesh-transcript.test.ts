@@ -161,6 +161,78 @@ describe("Rajesh transcript", () => {
       ["message", "Earlier note"],
     ]);
   });
+  it("puts a task's card under each update about it, with only the newest one live", () => {
+    const update = (
+      id: string,
+      time: number,
+      event: string,
+      threadId = "thread",
+    ): RajeshMessage => ({
+      ...message(id, time, `Update ${id}`, true),
+      t3: { environmentId: "env", threadId, event, title: "Fix the login" } as RajeshMessage["t3"],
+    });
+    const entries = buildRajeshChatEntries(
+      [
+        message("app:1", 10, "fix the login bug"),
+        message("out:started", 21, "Started the login fix.", true),
+        update("out:asked", 40, "question"),
+        // The Discord echo of an update carries no card of its own.
+        message("discord:personal:2", 41, "Update out:asked", true),
+        // An update Rajesh kept to itself shows nothing, card included.
+        { ...update("out:quiet", 50, "done"), text: "NO_REPLY" },
+        update("out:other", 60, "failed", "other"),
+        update("out:done", 70, "done"),
+        // A user message cannot claim a card, and an unknown event is not guessed at.
+        { ...update("app:2", 80, "done"), bot: false },
+        update("out:future", 90, "paused"),
+      ],
+      [
+        { environmentId: "env", threadId: "thread", state: "launched", created: 20 },
+        { environmentId: "env", threadId: "idle", state: "launched", created: 30 },
+      ],
+    );
+    expect(
+      entries.map((entry) =>
+        entry.kind === "task"
+          ? [entry.id, entry.threadId, entry.moment, entry.latest, entry.title]
+          : entry.id,
+      ),
+    ).toEqual([
+      "app:1",
+      ["task:env:thread", "thread", "started", false, "Fix the login"],
+      "out:started",
+      ["task:env:idle", "idle", "started", true, null],
+      "out:asked",
+      ["task:out:asked", "thread", "question", false, "Fix the login"],
+      "out:other",
+      ["task:out:other", "other", "failed", true, "Fix the login"],
+      "out:done",
+      ["task:out:done", "thread", "done", true, "Fix the login"],
+      "app:2",
+      "out:future",
+    ]);
+  });
+  it("drops a start card that sits directly above the same task's update", () => {
+    const report: RajeshMessage = {
+      ...message("out:report", 31, "Your own thread finished.", true),
+      t3: { environmentId: "env", threadId: "mine", event: "done" },
+    };
+    const threads = [
+      { environmentId: "env", threadId: "mine", state: "adopted", adopted: true, created: 29 },
+    ];
+    expect(
+      buildRajeshChatEntries([report], threads).map((entry) =>
+        entry.kind === "task" ? [entry.moment, entry.latest] : entry.id,
+      ),
+    ).toEqual(["out:report", ["done", true]]);
+    // With anything else in between, the earlier card stays as the record of when it ended.
+    expect(
+      buildRajeshChatEntries(
+        [message("discord:personal:9", 30, "Checking it.", true), report],
+        threads,
+      ).map((entry) => (entry.kind === "task" ? [entry.moment, entry.latest] : entry.id)),
+    ).toEqual([["ended", false], "discord:personal:9", "out:report", ["done", true]]);
+  });
 });
 
 describe("Rajesh chat rows", () => {
@@ -211,6 +283,10 @@ describe("Rajesh chat rows", () => {
           environmentId: "e",
           threadId: "x",
           time: at("2026-11-11T09:42:30"),
+          moment: "started",
+          messageId: null,
+          title: null,
+          latest: true,
         },
         {
           kind: "message",

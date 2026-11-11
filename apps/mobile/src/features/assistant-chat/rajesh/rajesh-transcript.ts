@@ -6,6 +6,18 @@ export interface RajeshAttachment {
   readonly url?: string;
 }
 
+/** How a task stood when Rajesh wrote about it. */
+export type RajeshTaskEvent = "done" | "question" | "approval" | "failed" | "stopped";
+const TASK_EVENTS: ReadonlyArray<string> = ["done", "question", "approval", "failed", "stopped"];
+
+/** The T3 thread one of Rajesh's replies reports on (gateway `t3` on a message). */
+export interface RajeshTaskUpdate {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly event: RajeshTaskEvent;
+  readonly title?: string;
+}
+
 /** A message as the Rajesh Code gateway returns it. */
 export interface RajeshMessage {
   readonly id: string;
@@ -15,6 +27,7 @@ export interface RajeshMessage {
   readonly bot: boolean;
   readonly time: number;
   readonly attachments?: ReadonlyArray<RajeshAttachment>;
+  readonly t3?: RajeshTaskUpdate;
 }
 
 /** A file shown on a message; `attachment` is null when the gateway offers no copy of it. */
@@ -28,8 +41,13 @@ export interface RajeshT3Thread {
   readonly environmentId: string;
   readonly threadId: string;
   readonly state: string;
+  /** A thread the owner started in T3; Rajesh picked it up once it had ended. */
+  readonly adopted?: boolean;
   readonly created: number;
 }
+
+/** What a task card marks: the task starting, ending unreported, or one of Rajesh's updates. */
+export type RajeshTaskMoment = "started" | "ended" | RajeshTaskEvent;
 
 export type RajeshChatEntry =
   | {
@@ -48,6 +66,13 @@ export type RajeshChatEntry =
       readonly environmentId: string;
       readonly threadId: string;
       readonly time: number;
+      readonly moment: RajeshTaskMoment;
+      /** The update this card belongs to; null for the card a task gets when it starts. */
+      readonly messageId: string | null;
+      /** The task's name as Rajesh knew it, for a device that has not loaded the thread. */
+      readonly title: string | null;
+      /** Whether this is the task's newest card. Earlier ones are a one-line record. */
+      readonly latest: boolean;
     };
 
 export interface RajeshCursor {
@@ -136,6 +161,21 @@ function rajeshBotContent(message: RajeshMessage) {
 const ACTIVITY =
   /^(?:\d+ more tool calls \.\.\.\n)?(?:\S+\s+)?Tool activity\b|^Queued\. Waiting for an available task slot\.$/;
 
+// Chats saved on the device and gateways of other versions are read as they come.
+function taskUpdate(message: RajeshMessage): RajeshTaskUpdate | null {
+  const update: Partial<RajeshTaskUpdate> | undefined = message.t3;
+  return message.bot &&
+    typeof update?.environmentId === "string" &&
+    typeof update.threadId === "string" &&
+    TASK_EVENTS.includes(String(update.event))
+    ? (update as RajeshTaskUpdate)
+    : null;
+}
+
+type RajeshTaskEntry = Extract<RajeshChatEntry, { kind: "task" }>;
+const sameTask = (a: RajeshTaskEntry, b: RajeshChatEntry | undefined) =>
+  b?.kind === "task" && a.environmentId === b.environmentId && a.threadId === b.threadId;
+
 /**
  * The chat as Rajesh's Discord conversation shows it. Each bot reply is stored twice, as its
  * delivery (`out:…`) and as the Discord message that echoes it (possibly split in chunks); only
@@ -177,6 +217,20 @@ export function buildRajeshChatEntries(
       replyTo,
       time: message.time,
     });
+    const update = taskUpdate(message);
+    if (update) {
+      entries.push({
+        kind: "task",
+        id: `task:${message.id}`,
+        environmentId: update.environmentId,
+        threadId: update.threadId,
+        time: message.time,
+        moment: update.event,
+        messageId: message.id,
+        title: update.title || null,
+        latest: false,
+      });
+    }
   }
   for (const thread of threads) {
     entries.push({
@@ -185,9 +239,36 @@ export function buildRajeshChatEntries(
       environmentId: thread.environmentId,
       threadId: thread.threadId,
       time: thread.created,
+      moment: thread.adopted ? "ended" : "started",
+      messageId: null,
+      title: null,
+      latest: false,
     });
   }
-  return entries.sort((a, b) => a.time - b.time);
+  // The sort is stable, so an update's card stays directly under its message.
+  entries.sort((a, b) => a.time - b.time);
+  // A start card directly above the same task's update would show the task twice in a row.
+  const shown = entries.filter(
+    (entry, index) =>
+      !(
+        entry.kind === "task" &&
+        entry.messageId === null &&
+        entries[index + 1]?.kind === "message" &&
+        sameTask(entry, entries[index + 2])
+      ),
+  );
+  // Only a task's newest card is `latest`, so its status now is shown once. Every card of a
+  // task carries the newest name any update gave it.
+  const titles = new Map<string, string | null>();
+  for (let index = shown.length - 1; index >= 0; index--) {
+    const entry = shown[index]!;
+    if (entry.kind !== "task") continue;
+    const task = `${entry.environmentId}:${entry.threadId}`;
+    const title = titles.get(task) ?? entry.title;
+    shown[index] = { ...entry, title, latest: !titles.has(task) };
+    titles.set(task, title);
+  }
+  return shown;
 }
 
 export type RajeshChatRow =

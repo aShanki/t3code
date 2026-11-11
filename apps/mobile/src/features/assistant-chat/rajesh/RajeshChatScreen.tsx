@@ -822,6 +822,9 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                     threadId={row.threadId}
                     environmentIds={[row.environmentId, row.environmentId]}
                     onOpen={openThread}
+                    moment={row.moment}
+                    title={row.title}
+                    compact={!row.latest}
                   />
                 ) : row.kind === "working" ? (
                   <View
@@ -1203,10 +1206,14 @@ type TimelineRow =
   | { readonly kind: "pending"; readonly id: string; readonly send: PendingSend }
   | { readonly kind: "working"; readonly id: string };
 
-/** Vertical rhythm: 8 within a speaker's run, 10–12 around task cards, 20 between speakers. */
+/**
+ * Vertical rhythm: 8 within a speaker's run and between an update and its task card, 10–12
+ * around other task cards, 20 between speakers.
+ */
 function spaceBefore(previous: TimelineRow | undefined, row: TimelineRow): number {
   if (previous === undefined || previous.kind === "separator") return 0;
   if (row.kind === "separator") return 12;
+  if (row.kind === "task" && row.messageId !== null && row.messageId === previous.id) return 8;
   if (row.kind === "task") return previous.kind === "task" ? 10 : 12;
   if (previous.kind === "task") return 12;
   const speaker = (item: TimelineRow) =>
