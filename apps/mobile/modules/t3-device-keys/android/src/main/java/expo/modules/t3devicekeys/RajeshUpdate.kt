@@ -61,10 +61,16 @@ object RajeshUpdate {
       check(download(URL(releaseUrl(versionCode)), file) == sha256) { "The update's checksum did not match." }
       verifyArchive(packages, file, versionCode)
       val uri = FileProvider.getUriForFile(context, "$PACKAGE.rajesh-updates", file)
+      // Clears the installer's task: a screen left open by the last update would otherwise
+      // come forward in place of this install.
       context.startActivity(
         Intent(Intent.ACTION_VIEW)
           .setDataAndType(uri, "application/vnd.android.package-archive")
-          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+          .addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+              Intent.FLAG_ACTIVITY_CLEAR_TASK or
+              Intent.FLAG_GRANT_READ_URI_PERMISSION
+          )
       )
     } catch (error: Exception) {
       file.delete()
