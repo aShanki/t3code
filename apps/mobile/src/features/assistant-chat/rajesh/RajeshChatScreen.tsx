@@ -1,9 +1,25 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { AppState, FlatList, Image, Linking, Pressable, ScrollView, View } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import {
+  AppState,
+  FlatList,
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  View,
+  type TextInputInstance,
+} from "react-native";
+import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 
 import { SymbolView } from "../../../components/ui/AppSymbol";
 import { AppBar } from "../../../components/ui/AppBar";
@@ -15,8 +31,8 @@ import { SelectableMarkdownText } from "../../../native/SelectableMarkdownText";
 import type { RajeshChat } from "../../../persistence/mobile-preferences";
 import { useSelectWorkspaceDetail } from "../../layout/workspace/useSelectWorkspaceDetail";
 import { useMarkdownStyles } from "../../threads/ThreadFeed";
-import { WorkLogBlock, WorkLogLabel, WorkLogPressable } from "../../threads/work-log-layout";
 import { useSetRajeshChat } from "../assistant-chat-state";
+import { useKeyboardOverlap } from "../use-keyboard-overlap";
 import { TaskCard } from "../TaskCard";
 import {
   DEFAULT_RAJESH_GATEWAY,
@@ -41,6 +57,7 @@ import {
   buildRajeshChatRows,
   mergeRajeshMessages,
   rajeshCursor,
+  rajeshReplyText,
   rajeshUserContent,
   type RajeshChatRow,
   type RajeshMessage,
@@ -395,6 +412,10 @@ interface PendingSend {
   readonly error: string | null;
 }
 
+/** What a send shows as, read the same way as the message Rajesh records for it. */
+const pendingContent = (send: PendingSend) =>
+  rajeshUserContent({ id: send.requestId, text: send.text, author: "", bot: false, time: 0 });
+
 const SEND_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000];
 
 /** Sends until accepted. Safe to repeat: the gateway keys each send on its request ID. */
@@ -435,6 +456,9 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const [token, setToken] = useState<string | null | undefined>(undefined);
   const [text, setText] = useState("");
   const [file, setFile] = useState<RajeshFile | null>(null);
+  const [replyTo, setReplyTo] = useState<string | null>(null);
+  const input = useRef<TextInputInstance>(null);
+  const keyboard = useKeyboardOverlap();
   const [pending, setPending] = useState<ReadonlyArray<PendingSend>>([]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the session token from secure storage once per gateway
@@ -461,11 +485,23 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const submit = () => {
     const message = text.trim();
     if ((message === "" && file === null) || !token) return;
-    const send = { requestId: uuidv4(), text: message, file, sentAt: Date.now(), error: null };
+    const send = {
+      requestId: uuidv4(),
+      text: replyTo === null ? message : rajeshReplyText(replyTo, message),
+      file,
+      sentAt: Date.now(),
+      error: null,
+    };
     setPending((all) => [...all, send]);
     setText("");
     setFile(null);
+    setReplyTo(null);
     void deliver(send);
+  };
+  const startReply = (message: string) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+    setReplyTo(message);
+    input.current?.focus();
   };
   const attach = () =>
     void pickRajeshFile()
@@ -515,17 +551,24 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     feed.receivedAt,
   );
   // A sent message stays as a local bubble until Rajesh records it.
-  const outstanding = pending.filter(
-    (send) =>
-      !feed.messages.some((message) => {
-        if (message.bot || message.time < send.sentAt - 60_000) return false;
-        const recorded = rajeshUserContent(message);
-        return recorded.text === send.text && recorded.files.length === (send.file ? 1 : 0);
-      }),
-  );
+  const outstanding = pending.filter((send) => {
+    const mine = pendingContent(send);
+    return !feed.messages.some((message) => {
+      if (message.bot || message.time < send.sentAt - 60_000) return false;
+      const recorded = rajeshUserContent(message);
+      return (
+        recorded.text === mine.text &&
+        recorded.replyTo === mine.replyTo &&
+        recorded.files.length === (send.file ? 1 : 0)
+      );
+    });
+  });
+  // The gateway's status is only as fresh as the connection that reported it.
+  const working = feed.status === "running" && feed.error === null;
   const timeline: ReadonlyArray<TimelineRow> = [
     ...rows,
     ...outstanding.map((send) => ({ kind: "pending" as const, id: send.requestId, send })),
+    ...(working ? [{ kind: "working" as const, id: "working" }] : []),
   ];
   const spaced = timeline.map((row, index) => ({
     row,
@@ -541,11 +584,10 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const canSend = text.trim() !== "" || file !== null;
 
   return (
-    <KeyboardAvoidingView
-      automaticOffset
-      behavior="height"
+    <View
+      onLayout={keyboard.onLayout}
       className="flex-1 bg-screen"
-      style={{ paddingTop: insets.top }}
+      style={{ paddingTop: insets.top, paddingBottom: keyboard.overlap }}
     >
       {feed.error && feed.ready ? (
         <View className="mx-4 mt-3 rounded-xl bg-warning p-3">
@@ -576,18 +618,25 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                   environmentIds={[row.environmentId, row.environmentId]}
                   onOpen={openThread}
                 />
-              ) : row.kind === "activity" ? (
-                <RajeshActivity text={row.text} />
+              ) : row.kind === "working" ? (
+                <View
+                  accessible
+                  accessibilityLabel="Rajesh is working"
+                  accessibilityLiveRegion="polite"
+                  className="self-start rounded-[20px] border border-border bg-card px-3.5 py-2.5"
+                >
+                  <Text className="text-sm leading-5 text-foreground-muted">
+                    Rajesh is working…
+                  </Text>
+                </View>
               ) : row.kind === "pending" ? (
                 <View className="max-w-[85%] self-end">
-                  <View className="gap-2 rounded-[20px] bg-user-bubble px-3.5 py-3">
-                    {row.send.text === "" ? null : (
-                      <Text selectable className="text-base leading-6 text-user-bubble-foreground">
-                        {row.send.text}
-                      </Text>
-                    )}
-                    {row.send.file ? <SentFile name={row.send.file.name} /> : null}
-                  </View>
+                  <UserBubble
+                    {...pendingContent(row.send)}
+                    files={row.send.file ? [row.send.file.name] : []}
+                    textStyle={styles.user.nativeTextStyle}
+                    onLinkPress={onLinkPress}
+                  />
                   {row.send.error !== null ? (
                     <Pressable
                       accessibilityRole="button"
@@ -620,30 +669,28 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                   )}
                 </View>
               ) : row.role === "assistant" ? (
-                <View>
-                  {row.showSpeaker ? (
-                    <Text className="mb-1.5 text-xs leading-4 font-t3-medium text-foreground-muted">
-                      Rajesh
-                    </Text>
-                  ) : null}
-                  <SelectableMarkdownText
-                    markdown={row.text}
-                    textStyle={styles.assistant.nativeTextStyle}
-                    onLinkPress={onLinkPress}
-                  />
-                </View>
-              ) : (
-                <View className="max-w-[85%] gap-2 self-end rounded-[20px] bg-user-bubble px-3.5 py-3">
-                  {row.text === "" ? null : (
+                <SwipeToReply onReply={() => startReply(row.text)}>
+                  <Pressable
+                    onLongPress={() => copyMessage(row.text)}
+                    className="max-w-[85%] self-start rounded-[20px] border border-border bg-card px-3.5 py-3"
+                  >
                     <SelectableMarkdownText
                       markdown={row.text}
-                      textStyle={styles.user.nativeTextStyle}
+                      selectable={false}
+                      textStyle={styles.assistant.nativeTextStyle}
                       onLinkPress={onLinkPress}
                     />
-                  )}
-                  {row.files.map((name) => (
-                    <SentFile key={name} name={name} />
-                  ))}
+                  </Pressable>
+                </SwipeToReply>
+              ) : (
+                <View className="max-w-[85%] self-end">
+                  <UserBubble
+                    text={row.text}
+                    files={row.files}
+                    replyTo={row.replyTo}
+                    textStyle={styles.user.nativeTextStyle}
+                    onLinkPress={onLinkPress}
+                  />
                 </View>
               )}
             </View>
@@ -651,6 +698,32 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
         />
       )}
       <View className="bg-screen px-3 pt-2" style={{ paddingBottom: Math.max(insets.bottom, 8) }}>
+        {replyTo !== null ? (
+          <View className="mb-2 flex-row items-center gap-2 rounded-2xl bg-grouped-card py-1 pl-3">
+            <View className="w-0.5 self-stretch rounded-full bg-primary" />
+            <View className="min-w-0 flex-1 py-1">
+              <Text className="text-xs leading-4 font-t3-medium text-foreground-muted">
+                Replying to Rajesh
+              </Text>
+              <Text numberOfLines={1} className="text-sm leading-5 text-foreground">
+                {replyTo.replace(/\s+/g, " ")}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel reply"
+              onPress={() => setReplyTo(null)}
+              className="h-10 w-10 items-center justify-center"
+            >
+              <SymbolView
+                name="xmark.circle.fill"
+                size={18}
+                tintColorClassName="accent-foreground-muted"
+                type="monochrome"
+              />
+            </Pressable>
+          </View>
+        ) : null}
         {file ? (
           <View className="mb-2 flex-row items-center gap-2 self-start rounded-2xl bg-grouped-card py-1 pl-3">
             <SymbolView
@@ -695,6 +768,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
               </Pressable>
               <TextInput
                 {...focus}
+                ref={input}
                 accessibilityLabel="Message Rajesh"
                 multiline
                 maxLength={50_000}
@@ -702,7 +776,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                 placeholderTextColorClassName="accent-placeholder"
                 value={text}
                 onChangeText={setText}
-                textAlignVertical="top"
+                textAlignVertical="center"
                 className="max-h-36 min-h-12 min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2.5 text-base leading-6 text-foreground"
               />
               <Pressable
@@ -730,7 +804,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
           )}
         </OutlinedInput>
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -750,42 +824,105 @@ function SentFile({ name }: { readonly name: string }) {
   );
 }
 
-function RajeshActivity({ text }: { readonly text: string }) {
-  const [expanded, setExpanded] = useState(false);
+/** Bubble text is not selectable, so the swipe owns its touches; a long press copies it all. */
+function copyMessage(text: string) {
+  if (text === "") return;
+  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+  void Clipboard.setStringAsync(text);
+}
+
+type MarkdownTextProps = Pick<
+  React.ComponentProps<typeof SelectableMarkdownText>,
+  "textStyle" | "onLinkPress"
+>;
+
+function UserBubble(
+  props: MarkdownTextProps & {
+    readonly text: string;
+    readonly files: ReadonlyArray<string>;
+    readonly replyTo: string | null;
+  },
+) {
   return (
-    <WorkLogBlock>
-      <WorkLogPressable
-        accessibilityRole="button"
-        accessibilityLabel={expanded ? "Hide tool details" : "Show tool details"}
-        accessibilityState={{ expanded }}
-        onPress={() => setExpanded(!expanded)}
+    <Pressable
+      onLongPress={() => copyMessage(props.text)}
+      className="gap-2 rounded-[20px] bg-user-bubble px-3.5 py-3"
+    >
+      {props.replyTo === null ? null : (
+        <View className="border-l-2 border-primary pl-2">
+          <Text className="text-xs leading-4 font-t3-medium text-user-bubble-foreground-muted">
+            Rajesh
+          </Text>
+          <Text numberOfLines={2} className="text-sm leading-5 text-user-bubble-foreground-muted">
+            {props.replyTo}
+          </Text>
+        </View>
+      )}
+      {props.text === "" ? null : (
+        <SelectableMarkdownText
+          markdown={props.text}
+          selectable={false}
+          textStyle={props.textStyle}
+          onLinkPress={props.onLinkPress}
+        />
+      )}
+      {props.files.map((name) => (
+        <SentFile key={name} name={name} />
+      ))}
+    </Pressable>
+  );
+}
+
+const REPLY_SWIPE = 56;
+
+/** Drag a message right to reply to it. It follows the finger a short way, then returns. */
+function SwipeToReply(props: { readonly onReply: () => void; readonly children: ReactNode }) {
+  const translation = useSharedValue(0);
+  const { onReply } = props;
+  const gesture = usePanGesture({
+    // Rightward only, and only once clearly horizontal, so the list keeps its vertical scroll.
+    activeOffsetX: 12,
+    failOffsetX: -12,
+    failOffsetY: [-12, 12],
+    onUpdate: (event) => {
+      translation.set(Math.min(Math.max(event.translationX, 0), REPLY_SWIPE + 16));
+    },
+    onDeactivate: (event) => {
+      if (!event.canceled && event.translationX >= REPLY_SWIPE) runOnJS(onReply)();
+      translation.set(withTiming(0, { duration: 160 }));
+    },
+  });
+  const messageStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translation.value }],
+  }));
+  const hintStyle = useAnimatedStyle(() => ({
+    opacity: Math.min(translation.value / REPLY_SWIPE, 1),
+  }));
+  return (
+    <GestureDetector gesture={gesture}>
+      <View
+        accessibilityActions={[{ name: "activate", label: "Reply" }]}
+        onAccessibilityAction={onReply}
+        className="justify-center"
       >
-        <SymbolView
-          name="terminal"
-          size={16}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-        <WorkLogLabel>Tool activity</WorkLogLabel>
-        <SymbolView
-          name={expanded ? "chevron.up" : "chevron.down"}
-          size={12}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-      </WorkLogPressable>
-      {expanded ? (
-        <Text selectable className="text-sm text-foreground-muted">
-          {text}
-        </Text>
-      ) : null}
-    </WorkLogBlock>
+        <Animated.View style={hintStyle} className="absolute left-1">
+          <SymbolView
+            name="arrow.uturn.backward"
+            size={20}
+            tintColorClassName="accent-foreground-muted"
+            type="monochrome"
+          />
+        </Animated.View>
+        <Animated.View style={messageStyle}>{props.children}</Animated.View>
+      </View>
+    </GestureDetector>
   );
 }
 
 type TimelineRow =
   | RajeshChatRow
-  | { readonly kind: "pending"; readonly id: string; readonly send: PendingSend };
+  | { readonly kind: "pending"; readonly id: string; readonly send: PendingSend }
+  | { readonly kind: "working"; readonly id: string };
 
 /** Vertical rhythm: 8 within a speaker's run, 10–12 around task cards, 20 between speakers. */
 function spaceBefore(previous: TimelineRow | undefined, row: TimelineRow): number {
@@ -794,7 +931,13 @@ function spaceBefore(previous: TimelineRow | undefined, row: TimelineRow): numbe
   if (row.kind === "task") return previous.kind === "task" ? 10 : 12;
   if (previous.kind === "task") return 12;
   const speaker = (item: TimelineRow) =>
-    item.kind === "pending" ? "user" : item.kind === "message" ? item.role : null;
+    item.kind === "pending"
+      ? "user"
+      : item.kind === "working"
+        ? "assistant"
+        : item.kind === "message"
+          ? item.role
+          : null;
   return speaker(previous) === speaker(row) ? 8 : 20;
 }
 

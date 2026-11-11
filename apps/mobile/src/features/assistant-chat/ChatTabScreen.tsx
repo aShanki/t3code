@@ -15,7 +15,6 @@ import {
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import { useState } from "react";
 import { FlatList, Linking, Pressable, View } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -58,6 +57,7 @@ import {
 import { useAssistantChat, useForgetAssistantChat, useRajeshChat } from "./assistant-chat-state";
 import { RajeshChatScreen, RajeshConnect } from "./rajesh/RajeshChatScreen";
 import { TaskCard } from "./TaskCard";
+import { useKeyboardOverlap } from "./use-keyboard-overlap";
 
 /** The Chat tab: one persistent assistant thread shown as a conversation. */
 export function ChatTabScreen() {
@@ -204,6 +204,7 @@ function AssistantChatConversation(props: { readonly chat: AssistantChat }) {
   const threadId = ThreadId.make(props.chat.threadId);
   const ref = scopeThreadRef(environmentId, threadId);
   const insets = useSafeAreaInsets();
+  const keyboard = useKeyboardOverlap();
   const forget = useForgetAssistantChat();
   const openThread = useOpenThread();
   const state = useEnvironmentThread(environmentId, threadId);
@@ -247,7 +248,11 @@ function AssistantChatConversation(props: { readonly chat: AssistantChat }) {
   }
 
   return (
-    <KeyboardAvoidingView automaticOffset behavior="height" className="flex-1 bg-screen">
+    <View
+      onLayout={keyboard.onLayout}
+      className="flex-1 bg-screen"
+      style={{ paddingBottom: keyboard.overlap }}
+    >
       <AppBar title="Chat" />
       <View className="flex-row items-center gap-2 border-b border-border-subtle px-4 py-1.5">
         <Pressable
@@ -328,7 +333,7 @@ function AssistantChatConversation(props: { readonly chat: AssistantChat }) {
         busy={working || needsAttention}
         bottomInset={insets.bottom}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

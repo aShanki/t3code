@@ -73,6 +73,8 @@ export interface MarkdownLinkCustomization {
 export interface SelectableMarkdownTextProps {
   readonly markdown: string;
   readonly textStyle: NativeMarkdownTextStyle;
+  /** Off where a gesture owns the text's touches, such as a swipe across it. Defaults to on. */
+  readonly selectable?: boolean;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly models?: ReadonlyArray<SelectableMarkdownModel>;
   readonly preserveSoftBreaks?: boolean;

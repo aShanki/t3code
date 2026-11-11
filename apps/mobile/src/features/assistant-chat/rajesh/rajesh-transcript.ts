@@ -18,18 +18,14 @@ export interface RajeshT3Thread {
 
 export type RajeshChatEntry =
   | {
-      readonly kind: "activity";
-      readonly id: string;
-      readonly text: string;
-      readonly time: number;
-    }
-  | {
       readonly kind: "message";
       readonly id: string;
       readonly role: "user" | "assistant";
       readonly text: string;
       /** Names of the files sent with a user message. */
       readonly files: ReadonlyArray<string>;
+      /** The excerpt of Rajesh's message that a user message replies to. */
+      readonly replyTo: string | null;
       readonly time: number;
     }
   | {
@@ -70,19 +66,39 @@ const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
 const readable = (text: string) => text.replace(/<@[!&]?\d+>/g, "").trim();
 
 const USER_FILE = /\n?\[User attachment: ([^\]\n]+)\]/g;
+const REPLY = /^> Replying to Rajesh: “([^\n]*)”\n*/;
+const EXCERPT_LENGTH = 160;
 
-/** A user message without the gateway's upload markers, and the names of the files they mark. */
+/**
+ * A reply as it is sent. The gateway takes text only, so the message replied to travels as a
+ * quoted excerpt that Rajesh, Discord and this app can all read.
+ */
+export function rajeshReplyText(repliedTo: string, text: string): string {
+  const line = normalize(repliedTo);
+  const excerpt = line.length > EXCERPT_LENGTH ? `${line.slice(0, EXCERPT_LENGTH)}…` : line;
+  return `> Replying to Rajesh: “${excerpt}”\n\n${text}`;
+}
+
+/** A user message split into its reply excerpt, its own text and the names of its files. */
 export function rajeshUserContent(message: RajeshMessage): {
   readonly text: string;
   readonly files: ReadonlyArray<string>;
+  readonly replyTo: string | null;
 } {
+  const body = (message.displayText ?? message.text).replace(USER_FILE, "");
+  const reply = REPLY.exec(body);
   return {
-    text: readable((message.displayText ?? message.text).replace(USER_FILE, "")),
+    text: readable(reply ? body.slice(reply[0].length) : body),
     files: [...message.text.matchAll(USER_FILE)].map(
       (match) => match[1]!.split("/").pop() || "file",
     ),
+    replyTo: reply ? reply[1]! : null,
   };
 }
+
+// The bot's progress posts: its tool log in any state, and its queue notice.
+const ACTIVITY =
+  /^(?:\d+ more tool calls \.\.\.\n)?(?:\S+\s+)?Tool activity\b|^Queued\. Waiting for an available task slot\.$/;
 
 /**
  * The chat as Rajesh's Discord conversation shows it. Each bot reply is stored twice, as its
@@ -105,21 +121,19 @@ export function buildRajeshChatEntries(
   const entries: RajeshChatEntry[] = [];
   for (const message of messages) {
     if (isEcho(message)) continue;
-    const { text, files } = message.bot
-      ? { text: readable(message.displayText ?? message.text), files: [] }
+    const { text, files, replyTo } = message.bot
+      ? { text: readable(message.displayText ?? message.text), files: [], replyTo: null }
       : rajeshUserContent(message);
     if (text === "" && files.length === 0) continue;
-    if (message.bot && text === "NO_REPLY") continue;
-    if (message.bot && /^(?:🛠️?\s*)?Tool activity\b/.test(text)) {
-      entries.push({ kind: "activity", id: message.id, text, time: message.time });
-      continue;
-    }
+    // Progress is shown as the working indicator, not as messages.
+    if (message.bot && (text === "NO_REPLY" || ACTIVITY.test(text))) continue;
     entries.push({
       kind: "message",
       id: message.id,
       role: message.bot ? "assistant" : "user",
       text,
       files,
+      replyTo,
       time: message.time,
     });
   }
@@ -137,9 +151,7 @@ export function buildRajeshChatEntries(
 
 export type RajeshChatRow =
   | { readonly kind: "separator"; readonly id: string; readonly label: string }
-  | (Extract<RajeshChatEntry, { kind: "message" }> & { readonly showSpeaker: boolean })
-  | Extract<RajeshChatEntry, { kind: "activity" }>
-  | Extract<RajeshChatEntry, { kind: "task" }>;
+  | RajeshChatEntry;
 
 const GROUP_GAP_MS = 30 * 60 * 1000;
 
@@ -166,9 +178,8 @@ export function rajeshSeparatorLabel(time: number, nowMs: number, locale?: strin
 }
 
 /**
- * Display rows in chronological order: a time separator before a new local day or a gap of
- * 30 minutes between messages, and Rajesh's name at the start of each run of his replies.
- * Task cards neither start a separator nor break a run.
+ * Display rows in chronological order, with a time separator before a new local day or a gap
+ * of 30 minutes between messages. Task cards do not start a separator.
  */
 export function buildRajeshChatRows(
   entries: ReadonlyArray<RajeshChatEntry>,
@@ -178,7 +189,7 @@ export function buildRajeshChatRows(
   const rows: RajeshChatRow[] = [];
   let previousMessage: Extract<RajeshChatEntry, { kind: "message" }> | undefined;
   for (const entry of entries) {
-    if (entry.kind === "task" || entry.kind === "activity") {
+    if (entry.kind === "task") {
       rows.push(entry);
       continue;
     }
@@ -193,8 +204,7 @@ export function buildRajeshChatRows(
         label: rajeshSeparatorLabel(entry.time, nowMs, locale),
       });
     }
-    const startsRun = previousMessage?.role !== "assistant" || rows.at(-1)?.kind === "separator";
-    rows.push({ ...entry, showSpeaker: entry.role === "assistant" && startsRun });
+    rows.push(entry);
     previousMessage = entry;
   }
   return rows;

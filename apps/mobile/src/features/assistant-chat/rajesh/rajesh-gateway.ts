@@ -38,14 +38,28 @@ export function normalizeRajeshGateway(value: string): string | null {
   }
 }
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 async function call<T>(
   baseUrl: string,
   path: string,
-  init: { readonly token?: string; readonly body?: unknown; readonly signal?: AbortSignal } = {},
+  init: {
+    readonly token?: string;
+    readonly body?: unknown;
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const method = init.body === undefined ? "GET" : "POST";
   // A session is bound to this device's Keystore key; each request proves possession of it.
   const proof = init.token ? await rajeshDeviceProof(baseUrl, method, path) : undefined;
+  // A connection that dies silently never answers. Without a deadline the request would hang,
+  // and the chat would keep showing whatever it last heard, such as Rajesh still working.
+  const request = new AbortController();
+  const abort = () => request.abort();
+  if (init.signal?.aborted) abort();
+  init.signal?.addEventListener("abort", abort);
+  const deadline = setTimeout(abort, init.timeoutMs ?? REQUEST_TIMEOUT_MS);
   const response = await fetch(baseUrl + path, {
     method,
     headers: {
@@ -54,7 +68,10 @@ async function call<T>(
       ...(proof ? { DPoP: proof } : {}),
     },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-    ...(init.signal ? { signal: init.signal } : {}),
+    signal: request.signal,
+  }).finally(() => {
+    clearTimeout(deadline);
+    init.signal?.removeEventListener("abort", abort);
   });
   const data: any = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -127,7 +144,7 @@ export const readRajeshUpdates = (
     baseUrl,
     `${taskPath(key)}/updates?afterTime=${input.after.time}&afterId=${encodeURIComponent(input.after.id)}&waitMs=${input.waitMs}` +
       (input.status === null ? "" : `&status=${encodeURIComponent(input.status)}`),
-    { token, signal: input.signal },
+    { token, signal: input.signal, timeoutMs: input.waitMs + 10_000 },
   );
 
 export const readRajeshT3Threads = (baseUrl: string, token: string, key: string) =>
@@ -154,6 +171,8 @@ export const sendRajeshMessage = (
   call<{ readonly accepted: boolean }>(baseUrl, `${taskPath(key)}/messages`, {
     token,
     body: { requestId, text, ...(file ? { files: [file] } : {}) },
+    // An upload of several megabytes over a slow connection needs longer than a plain request.
+    ...(file ? { timeoutMs: 120_000 } : {}),
   });
 
 export const stopRajesh = (baseUrl: string, token: string, key: string, requestId: string) =>

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildRajeshChatEntries,
   buildRajeshChatRows,
+  rajeshReplyText,
   rajeshSeparatorLabel,
+  rajeshUserContent,
   mergeRajeshMessages,
   rajeshCursor,
   type RajeshMessage,
@@ -18,21 +20,42 @@ const message = (id: string, time: number, text: string, bot = false): RajeshMes
 });
 
 describe("Rajesh transcript", () => {
-  it("folds bot tool logs and hides the no-reply sentinel without hiding user text", () => {
+  it("hides the bot's progress posts and no-reply sentinel, keeping what people wrote", () => {
     const entries = buildRajeshChatEntries(
       [
         message("a", 1, "🛠️ Tool activity\n✓ mcpToolCall: example", true),
-        message("b", 2, "NO_REPLY", true),
-        message("c", 3, "NO_REPLY"),
-        message("d", 4, "Here is the result", true),
+        message("b", 2, "3 more tool calls ...\n✅ Tool activity\n✓ exec: ls", true),
+        message("c", 3, "❌ Tool activity\n✗ exec: false", true),
+        message("d", 4, "Queued. Waiting for an available task slot.", true),
+        message("e", 5, "NO_REPLY", true),
+        message("f", 6, "NO_REPLY"),
+        message("g", 7, "Tool activity is hidden now"),
+        message("h", 8, "Here is the result", true),
       ],
       [],
     );
-    expect(entries.map((entry) => [entry.kind, entry.kind === "task" ? "" : entry.text])).toEqual([
-      ["activity", "🛠️ Tool activity\n✓ mcpToolCall: example"],
-      ["message", "NO_REPLY"],
-      ["message", "Here is the result"],
+    expect(entries.map((entry) => (entry.kind === "message" ? entry.text : entry.kind))).toEqual([
+      "NO_REPLY",
+      "Tool activity is hidden now",
+      "Here is the result",
     ]);
+  });
+  it("sends a reply as a quoted excerpt and reads it back", () => {
+    const long = `First line\nsecond   line ${"x".repeat(200)}`;
+    const sent = rajeshReplyText(long, "Do the second one");
+    expect(sent.split("\n")[0]).toBe(
+      `> Replying to Rajesh: “First line second line ${"x".repeat(137)}…”`,
+    );
+    const [entry] = buildRajeshChatEntries(
+      [message("a", 1, `${sent}\n[User attachment: /srv/uploads/ab12/plan.pdf]`)],
+      [],
+    );
+    expect(entry).toMatchObject({
+      text: "Do the second one",
+      files: ["plan.pdf"],
+      replyTo: `First line second line ${"x".repeat(137)}…`,
+    });
+    expect(rajeshUserContent(message("b", 2, "> a quote I typed\n\nmine")).replyTo).toBeNull();
   });
   it("shows a sent file by name instead of the gateway's upload path", () => {
     const entries = buildRajeshChatEntries(
@@ -91,7 +114,7 @@ describe("Rajesh transcript", () => {
 describe("Rajesh chat rows", () => {
   const at = (iso: string) => new Date(iso).getTime();
   const now = at("2026-11-11T15:00:00");
-  it("separates days and long gaps, and names Rajesh once per run of replies", () => {
+  it("separates days and long gaps", () => {
     const rows = buildRajeshChatRows(
       [
         {
@@ -100,6 +123,7 @@ describe("Rajesh chat rows", () => {
           role: "user",
           text: "hi",
           files: [],
+          replyTo: null,
           time: at("2026-11-10T18:10:00"),
         },
         {
@@ -108,6 +132,7 @@ describe("Rajesh chat rows", () => {
           role: "assistant",
           text: "hello",
           files: [],
+          replyTo: null,
           time: at("2026-11-10T18:11:00"),
         },
         {
@@ -116,6 +141,7 @@ describe("Rajesh chat rows", () => {
           role: "user",
           text: "plan",
           files: [],
+          replyTo: null,
           time: at("2026-11-11T09:41:00"),
         },
         {
@@ -124,6 +150,7 @@ describe("Rajesh chat rows", () => {
           role: "assistant",
           text: "one",
           files: [],
+          replyTo: null,
           time: at("2026-11-11T09:42:00"),
         },
         {
@@ -139,6 +166,7 @@ describe("Rajesh chat rows", () => {
           role: "assistant",
           text: "two",
           files: [],
+          replyTo: null,
           time: at("2026-11-11T09:43:00"),
         },
         {
@@ -147,6 +175,7 @@ describe("Rajesh chat rows", () => {
           role: "assistant",
           text: "later",
           files: [],
+          replyTo: null,
           time: at("2026-11-11T10:30:00"),
         },
       ],
@@ -155,23 +184,19 @@ describe("Rajesh chat rows", () => {
     );
     expect(
       rows.map((row) =>
-        row.kind === "separator"
-          ? row.label
-          : row.kind === "task"
-            ? "task"
-            : `${row.id}${row.kind === "message" && row.showSpeaker ? "*" : ""}`,
+        row.kind === "separator" ? row.label : row.kind === "task" ? "task" : row.id,
       ),
     ).toEqual([
       "Yesterday · 6:10 PM",
       "a",
-      "b*",
+      "b",
       "Today · 9:41 AM",
       "c",
-      "d*",
+      "d",
       "task",
       "e",
       "Today · 10:30 AM",
-      "f*",
+      "f",
     ]);
   });
 
