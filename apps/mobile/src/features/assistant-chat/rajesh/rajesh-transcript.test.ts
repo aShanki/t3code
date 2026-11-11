@@ -52,7 +52,7 @@ describe("Rajesh transcript", () => {
     );
     expect(entry).toMatchObject({
       text: "Do the second one",
-      files: ["plan.pdf"],
+      files: [{ name: "plan.pdf", attachment: null }],
       replyTo: `First line second line ${"x".repeat(137)}…`,
     });
     expect(rajeshUserContent(message("b", 2, "> a quote I typed\n\nmine")).replyTo).toBeNull();
@@ -69,9 +69,61 @@ describe("Rajesh transcript", () => {
     expect(
       entries.map((entry) => (entry.kind === "message" ? [entry.text, entry.files] : entry.kind)),
     ).toEqual([
-      ["Look at this", ["site_plan.pdf"]],
-      ["", ["photo.jpg"]],
+      ["Look at this", [{ name: "site_plan.pdf", attachment: null }]],
+      ["", [{ name: "photo.jpg", attachment: null }]],
       ["[User attachment: /srv/uploads/ef56/notes.txt]", []],
+    ]);
+  });
+  it("links files to the gateway's copies and shows a sent file once", () => {
+    const report = { id: "upload:r", name: "report.html", mime: "text/html" };
+    const plan = { id: "input:p", name: "plan.pdf", mime: "application/pdf" };
+    const shot = {
+      id: "discord-attachment:s",
+      name: "shot.png",
+      mime: "image/png",
+      url: "https://cdn.discordapp.com/attachments/1/2/shot.png",
+    };
+    const entries = buildRajeshChatEntries(
+      [
+        {
+          ...message("a", 1, "Plan\n[User attachment: /srv/uploads/ab12/plan.pdf]"),
+          attachments: [plan],
+        },
+        { ...message("b", 2, "From Discord"), attachments: [shot] },
+        // History reports a captionless delivery with an empty display text.
+        {
+          ...message("out:upload:r", 3, "Attached file: report.html", true),
+          displayText: "",
+          attachments: [report],
+        },
+        {
+          ...message(
+            "discord:personal:9",
+            4,
+            "[attachment: report.html] https://cdn.discordapp.com/x",
+            true,
+          ),
+          displayText: "",
+          attachments: [report],
+        },
+        // Live updates label it instead.
+        {
+          ...message("out:upload:q", 5, "{}", true),
+          displayText: "Here it is\nAttached file: report.html",
+          attachments: [report],
+        },
+      ],
+      [],
+    );
+    expect(
+      entries.map((entry) =>
+        entry.kind === "message" ? [entry.id, entry.text, entry.files] : entry.kind,
+      ),
+    ).toEqual([
+      ["a", "Plan", [{ name: "plan.pdf", attachment: plan }]],
+      ["b", "From Discord", [{ name: "shot.png", attachment: shot }]],
+      ["out:upload:r", "", [{ name: "report.html", attachment: report }]],
+      ["out:upload:q", "Here it is", [{ name: "report.html", attachment: report }]],
     ]);
   });
   it("merges updates by id in gateway order and advances the cursor", () => {

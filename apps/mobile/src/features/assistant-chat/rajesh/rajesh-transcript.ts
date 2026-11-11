@@ -1,3 +1,11 @@
+/** A file the gateway links to a message. `url` is set only for Discord's own CDN copies. */
+export interface RajeshAttachment {
+  readonly id: string;
+  readonly name: string;
+  readonly mime: string;
+  readonly url?: string;
+}
+
 /** A message as the Rajesh Code gateway returns it. */
 export interface RajeshMessage {
   readonly id: string;
@@ -6,6 +14,13 @@ export interface RajeshMessage {
   readonly author: string;
   readonly bot: boolean;
   readonly time: number;
+  readonly attachments?: ReadonlyArray<RajeshAttachment>;
+}
+
+/** A file shown on a message; `attachment` is null when the gateway offers no copy of it. */
+export interface RajeshFileRef {
+  readonly name: string;
+  readonly attachment: RajeshAttachment | null;
 }
 
 /** A T3 thread Rajesh launched for this chat (gateway `/t3`). */
@@ -22,8 +37,7 @@ export type RajeshChatEntry =
       readonly id: string;
       readonly role: "user" | "assistant";
       readonly text: string;
-      /** Names of the files sent with a user message. */
-      readonly files: ReadonlyArray<string>;
+      readonly files: ReadonlyArray<RajeshFileRef>;
       /** The excerpt of Rajesh's message that a user message replies to. */
       readonly replyTo: string | null;
       readonly time: number;
@@ -82,18 +96,40 @@ export function rajeshReplyText(repliedTo: string, text: string): string {
 /** A user message split into its reply excerpt, its own text and the names of its files. */
 export function rajeshUserContent(message: RajeshMessage): {
   readonly text: string;
-  readonly files: ReadonlyArray<string>;
+  readonly files: ReadonlyArray<RajeshFileRef>;
   readonly replyTo: string | null;
 } {
   const body = (message.displayText ?? message.text).replace(USER_FILE, "");
   const reply = REPLY.exec(body);
+  const attachments = [...(message.attachments ?? [])];
+  const files: RajeshFileRef[] = [...message.text.matchAll(USER_FILE)].map((match) => {
+    const name = match[1]!.split("/").pop() || "file";
+    const index = attachments.findIndex((attachment) => attachment.name === name);
+    const [attachment] = index < 0 ? [null] : attachments.splice(index, 1);
+    return { name, attachment: attachment ?? null };
+  });
+  // Files sent from Discord arrive as attachments with no marker in the text.
+  for (const attachment of attachments) files.push({ name: attachment.name, attachment });
   return {
     text: readable(reply ? body.slice(reply[0].length) : body),
-    files: [...message.text.matchAll(USER_FILE)].map(
-      (match) => match[1]!.split("/").pop() || "file",
-    ),
+    files,
     replyTo: reply ? reply[1]! : null,
   };
+}
+
+/** Rajesh's words with the "Attached file: name" label dropped for files shown as files. */
+function rajeshBotContent(message: RajeshMessage) {
+  const files = (message.attachments ?? []).map((attachment) => ({
+    name: attachment.name,
+    attachment,
+  }));
+  const names = new Set(files.map((file) => file.name));
+  const text = readable(message.displayText ?? message.text)
+    .split("\n")
+    .filter((line) => !(line.startsWith("Attached file: ") && names.has(line.slice(15).trim())))
+    .join("\n")
+    .trim();
+  return { text, files, replyTo: null };
 }
 
 // The bot's progress posts: its tool log in any state, and its queue notice.
@@ -110,19 +146,24 @@ export function buildRajeshChatEntries(
   threads: ReadonlyArray<RajeshT3Thread>,
 ): ReadonlyArray<RajeshChatEntry> {
   const deliveries = messages.filter((message) => message.bot && message.id.startsWith("out:"));
+  // A sent file's echo carries the same managed attachment as its delivery, not the same text.
+  const deliveredFiles = new Set(
+    deliveries.flatMap((delivery) => (delivery.attachments ?? []).map((file) => file.id)),
+  );
   const isEcho = (message: RajeshMessage) =>
     message.bot &&
     !message.id.startsWith("out:") &&
-    deliveries.some(
-      (delivery) =>
-        Math.abs(delivery.time - message.time) <= ECHO_WINDOW_MS &&
-        normalize(delivery.text).includes(normalize(message.text)),
-    );
+    ((message.attachments ?? []).some((file) => deliveredFiles.has(file.id)) ||
+      deliveries.some(
+        (delivery) =>
+          Math.abs(delivery.time - message.time) <= ECHO_WINDOW_MS &&
+          normalize(delivery.text).includes(normalize(message.text)),
+      ));
   const entries: RajeshChatEntry[] = [];
   for (const message of messages) {
     if (isEcho(message)) continue;
     const { text, files, replyTo } = message.bot
-      ? { text: readable(message.displayText ?? message.text), files: [], replyTo: null }
+      ? rajeshBotContent(message)
       : rajeshUserContent(message);
     if (text === "" && files.length === 0) continue;
     // Progress is shown as the working indicator, not as messages.

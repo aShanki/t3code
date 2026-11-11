@@ -30,6 +30,8 @@ export type AttachmentFileRouteParams = {
   readonly mimeType: string;
   readonly sizeBytes: string;
   readonly draftKey?: string;
+  /** A copy already downloaded to this device, for files that belong to no environment. */
+  readonly localFileUri?: string;
   readonly htmlRender?: "1";
 };
 
@@ -49,7 +51,18 @@ export function AttachmentFileScreen(props: AttachmentFileScreenProps) {
     ? draft.attachments.find((entry) => entry.id === params.attachmentId)
     : undefined;
   const localAttachment =
-    draftAttachment && isFileBackedComposerAttachment(draftAttachment) ? draftAttachment : null;
+    draftAttachment && isFileBackedComposerAttachment(draftAttachment)
+      ? draftAttachment
+      : params.localFileUri
+        ? {
+            id: params.attachmentId,
+            type: "file" as const,
+            name: params.name,
+            mimeType: params.mimeType,
+            sizeBytes,
+            fileUri: params.localFileUri,
+          }
+        : null;
   const document = useAttachmentDocument({
     name: params.name,
     mimeType: params.mimeType,

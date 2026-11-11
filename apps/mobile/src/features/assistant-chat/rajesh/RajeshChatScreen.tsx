@@ -10,6 +10,8 @@ import {
   View,
   type TextInputInstance,
 } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { Directory, File } from "expo-file-system";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, {
   runOnJS,
@@ -27,6 +29,8 @@ import { AppBar } from "../../../components/ui/AppBar";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
 import { Button } from "../../../components/ui/Button";
 import * as Dialog from "../../../components/ui/Dialog";
+import { FilePreviewModal, type FilePreviewSource } from "../../../components/ui/FilePreviewModal";
+import { downloadAttachmentForPreview } from "../../../lib/attachmentDownload";
 import { uuidv4 } from "../../../lib/uuid";
 import { SelectableMarkdownText } from "../../../native/SelectableMarkdownText";
 import type { RajeshChat } from "../../../persistence/mobile-preferences";
@@ -41,6 +45,7 @@ import {
   normalizeRajeshGateway,
   pollRajeshDevice,
   rajeshErrorStatus,
+  rajeshFileLink,
   readRajeshHistory,
   readRajeshT3Threads,
   readRajeshToken,
@@ -52,6 +57,11 @@ import {
   type RajeshFile,
 } from "./rajesh-gateway";
 import { pickRajeshFile } from "./rajesh-attachment";
+import {
+  clearRajeshChatCache,
+  readRajeshChatCache,
+  writeRajeshChatCache,
+} from "./rajesh-chat-cache";
 import { resetRajeshDeviceKey } from "./rajesh-device-key";
 import {
   buildRajeshChatEntries,
@@ -60,7 +70,9 @@ import {
   rajeshCursor,
   rajeshReplyText,
   rajeshUserContent,
+  type RajeshAttachment,
   type RajeshChatRow,
+  type RajeshFileRef,
   type RajeshMessage,
   type RajeshT3Thread,
 } from "./rajesh-transcript";
@@ -294,9 +306,14 @@ function OutlinedInput(props: {
 }
 
 interface Feed {
+  /** Something to show: the device's copy or the gateway's. */
   readonly ready: boolean;
+  /** The gateway has confirmed or replaced the device's copy since this screen opened. */
+  readonly synced: boolean;
   readonly messages: ReadonlyArray<RajeshMessage>;
   readonly threads: ReadonlyArray<RajeshT3Thread>;
+  readonly version: string | null;
+  readonly threadsVersion: string | null;
   readonly status: string | null;
   readonly error: string | null;
   readonly unauthorized: boolean;
@@ -306,15 +323,22 @@ interface Feed {
 
 const EMPTY_FEED: Feed = {
   ready: false,
+  synced: false,
   messages: [],
   threads: [],
+  version: null,
+  threadsVersion: null,
   status: null,
   error: null,
   unauthorized: false,
   receivedAt: 0,
 };
 
-/** History once, then the long-poll, until aborted. Plain code: it runs outside rendering. */
+/**
+ * The device's copy first, then the gateway's revalidation of it, then the long-poll, until
+ * aborted. On a slow network the saved chat shows at once, and an unchanged chat costs a few
+ * hundred bytes instead of the whole history. Plain code: it runs outside rendering.
+ */
 async function runRajeshFeed(
   chat: RajeshChat,
   token: string,
@@ -326,23 +350,53 @@ async function runRajeshFeed(
     latest.current = { ...next, receivedAt: Date.now() };
     setFeed(latest.current);
   };
-  const refreshThreads = async () => {
-    const { threads } = await readRajeshT3Threads(chat.baseUrl, token, chat.taskKey);
-    commit({ ...latest.current, threads });
+  const save = () => {
+    const { messages, threads, version, threadsVersion } = latest.current;
+    writeRajeshChatCache(chat.baseUrl, {
+      taskKey: chat.taskKey,
+      messages,
+      threads,
+      version,
+      threadsVersion,
+    });
   };
+  const refreshThreads = async () => {
+    const current = latest.current;
+    const result = await readRajeshT3Threads(
+      chat.baseUrl,
+      token,
+      chat.taskKey,
+      current.threadsVersion,
+    );
+    if (result.unchanged || result.threads === undefined) return;
+    commit({ ...latest.current, threads: result.threads, threadsVersion: result.version ?? null });
+    save();
+  };
+  if (!latest.current.ready) {
+    const saved = await readRajeshChatCache(chat.baseUrl, chat.taskKey);
+    if (saved !== null && !signal.aborted && !latest.current.ready) {
+      commit({ ...latest.current, ...saved, ready: true });
+    }
+  }
   let failures = 0;
   while (!signal.aborted) {
     try {
       const current = latest.current;
-      if (!current.ready) {
-        const history = await readRajeshHistory(chat.baseUrl, token, chat.taskKey);
+      if (!current.synced) {
+        const history = await readRajeshHistory(chat.baseUrl, token, chat.taskKey, current.version);
+        // The copy held was a cache: a changed chat is replaced, so edits and deletions apply.
+        const messages =
+          history.unchanged || history.messages === undefined ? current.messages : history.messages;
         commit({
-          ...current,
+          ...latest.current,
           ready: true,
-          messages: mergeRajeshMessages(current.messages, history.messages),
+          synced: true,
+          messages,
+          version: history.unchanged ? current.version : (history.version ?? null),
           status: history.task.status,
           error: null,
         });
+        if (!history.unchanged) save();
         await refreshThreads();
         continue;
       }
@@ -361,6 +415,7 @@ async function runRajeshFeed(
         status: update.status,
         error: null,
       });
+      if (update.messages.length > 0) save();
       // New launches show up with Rajesh's reply or when its run ends.
       if (statusChanged || update.messages.some((message) => message.bot)) await refreshThreads();
     } catch (error) {
@@ -369,7 +424,8 @@ async function runRajeshFeed(
       // device-key binding). Either way only a new pairing helps.
       const status = rajeshErrorStatus(error);
       if (status === 401 || status === 403) {
-        commit({ ...latest.current, unauthorized: true });
+        clearRajeshChatCache(chat.baseUrl);
+        commit({ ...EMPTY_FEED, unauthorized: true });
         return;
       }
       failures += 1;
@@ -412,6 +468,14 @@ interface PendingSend {
   /** Set once retries stop; the bubble then offers a manual retry. */
   readonly error: string | null;
 }
+
+const newPendingSend = (text: string, file: RajeshFile | null): PendingSend => ({
+  requestId: uuidv4(),
+  text,
+  file,
+  sentAt: Date.now(),
+  error: null,
+});
 
 /** What a send shows as, read the same way as the message Rajesh records for it. */
 const pendingContent = (send: PendingSend) =>
@@ -461,6 +525,15 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const input = useRef<TextInputInstance>(null);
   const keyboard = useKeyboardOverlap();
   const [pending, setPending] = useState<ReadonlyArray<PendingSend>>([]);
+  const navigation = useNavigation();
+  const list = useRef<FlatList<{ readonly row: TimelineRow; readonly space: number }>>(null);
+  /** Set while scrolled away from the latest message: the newest message seen before leaving. */
+  const [awayFrom, setAwayFrom] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<{
+    readonly source: FilePreviewSource;
+    readonly dispose: () => void;
+  } | null>(null);
+  const [openingFile, setOpeningFile] = useState<string | null>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the session token from secure storage once per gateway
   useEffect(() => {
@@ -486,19 +559,92 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const submit = () => {
     const message = text.trim();
     if ((message === "" && file === null) || !token) return;
-    const send = {
-      requestId: uuidv4(),
-      text: replyTo === null ? message : rajeshReplyText(replyTo, message),
+    const send = newPendingSend(
+      replyTo === null ? message : rajeshReplyText(replyTo, message),
       file,
-      sentAt: Date.now(),
-      error: null,
-    };
+    );
     setPending((all) => [...all, send]);
     setText("");
     setFile(null);
     setReplyTo(null);
+    scrollToLatest();
     void deliver(send);
   };
+  const scrollToLatest = () => list.current?.scrollToOffset({ offset: 0, animated: true });
+  /** A device copy of a file, fetched only when it is opened. */
+  const downloadFile = async (attachment: RajeshAttachment) => {
+    if (!token) throw new Error("Connect Rajesh again to open files.");
+    // The gateway's copies download through a single-use link; Discord's copies by their CDN link.
+    const url = attachment.id.startsWith("discord-attachment:")
+      ? attachment.url
+      : await rajeshFileLink(chat.baseUrl, token, attachment.id);
+    if (!url) throw new Error("Rajesh keeps no copy of this file. Open it in Discord.");
+    const local = await downloadAttachmentForPreview({
+      url,
+      attachment: { name: attachment.name, mimeType: attachment.mime },
+      signal: new AbortController().signal,
+    });
+    if (local === null) throw new Error("The download was interrupted. Try again.");
+    return local;
+  };
+  const withFile = (
+    file: RajeshFileRef,
+    use: (
+      attachment: RajeshAttachment,
+      local: Awaited<ReturnType<typeof downloadFile>>,
+    ) => Promise<void> | void,
+  ) => {
+    const { attachment } = file;
+    if (attachment === null) {
+      Dialog.alert(
+        "File unavailable",
+        "Rajesh's gateway kept no copy of this file, so it can only be opened in Discord.",
+      );
+      return;
+    }
+    if (openingFile !== null) return;
+    setOpeningFile(attachment.id);
+    void downloadFile(attachment)
+      .then((local) => use(attachment, local))
+      .catch((error: unknown) => Dialog.alert("Could not open file", errorText(error)))
+      .finally(() => setOpeningFile(null));
+  };
+  // The same viewers as T3 threads: images in the media viewer, everything else on the file page.
+  const openFile = (file: RajeshFileRef) =>
+    withFile(file, (attachment, local) => {
+      const base = { uri: local.uri, name: attachment.name, mimeType: attachment.mime };
+      if (attachment.mime.startsWith("image/")) {
+        setImagePreview({
+          source: { kind: "image", ...base, actionsSource: base },
+          dispose: local.dispose,
+        });
+        return;
+      }
+      navigation.navigate("ThreadAttachment", {
+        attachmentId: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mime,
+        sizeBytes: String(new File(local.uri).size ?? 0),
+        localFileUri: local.uri,
+      });
+    });
+  const saveFile = (file: RajeshFileRef) =>
+    withFile(file, (attachment, local) =>
+      Directory.pickDirectoryAsync()
+        .then(
+          async (folder) => {
+            const bytes = await new File(local.uri).bytes();
+            folder.createFile(attachment.name, attachment.mime).write(bytes);
+            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+              () => undefined,
+            );
+            Dialog.alert("File saved", `${attachment.name} was saved to the folder you chose.`);
+          },
+          // Closing the folder picker saves nothing.
+          () => undefined,
+        )
+        .finally(local.dispose),
+    );
   const startReply = (message: string) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     setReplyTo(message);
@@ -569,7 +715,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     });
   });
   // The gateway's status is only as fresh as the connection that reported it.
-  const working = feed.status === "running" && feed.error === null;
+  const working = feed.synced && feed.status === "running" && feed.error === null;
   const timeline: ReadonlyArray<TimelineRow> = [
     ...rows,
     ...outstanding.map((send) => ({ kind: "pending" as const, id: send.requestId, send })),
@@ -581,6 +727,13 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   }));
   // Inverted so the newest row stays anchored above the composer.
   const listRows = [...spaced].reverse();
+  const messageRows = rows.filter((row) => row.kind === "message");
+  const newestMessage = messageRows.at(-1)?.id ?? null;
+  const seenIndex = awayFrom === null ? -1 : messageRows.findIndex((row) => row.id === awayFrom);
+  const unread =
+    seenIndex < 0
+      ? 0
+      : messageRows.slice(seenIndex + 1).filter((row) => row.role === "assistant").length;
   const onLinkPress = (href: string) => {
     const link = parseThreadLinkHref(href);
     if (link?.environmentId) openThread(link.environmentId, link.threadId);
@@ -604,104 +757,166 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
       {timeline.length === 0 ? (
         <ChatEmptyState ready={feed.ready} failed={feed.error !== null} />
       ) : (
-        <FlatList
-          inverted
-          className="flex-1"
-          data={listRows}
-          keyExtractor={(item) => item.row.id}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16 }}
-          renderItem={({ item: { row, space } }) => (
-            <View style={{ paddingTop: space }}>
-              {row.kind === "separator" ? (
-                <Text className="py-2 text-center text-[13px] leading-[18px] text-foreground-muted">
-                  {row.label}
-                </Text>
-              ) : row.kind === "task" ? (
-                <TaskCard
-                  threadId={row.threadId}
-                  environmentIds={[row.environmentId, row.environmentId]}
-                  onOpen={openThread}
-                />
-              ) : row.kind === "working" ? (
-                <View
-                  accessible
-                  accessibilityLabel="Rajesh is working"
-                  accessibilityLiveRegion="polite"
-                  className="self-start rounded-[20px] border border-border bg-card px-3.5 py-2.5"
-                >
-                  <Text className="text-sm leading-5 text-foreground-muted">
-                    Rajesh is working…
+        <View className="flex-1">
+          <FlatList
+            ref={list}
+            inverted
+            className="flex-1"
+            data={listRows}
+            keyExtractor={(item) => item.row.id}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16 }}
+            // Reading older messages, new ones arrive below without moving the page; at the latest
+            // message the list follows them.
+            maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 48 }}
+            scrollEventThrottle={100}
+            onScroll={(event) => {
+              const away = event.nativeEvent.contentOffset.y > 240;
+              if (away && awayFrom === null) setAwayFrom(newestMessage ?? "");
+              else if (!away && awayFrom !== null) setAwayFrom(null);
+            }}
+            renderItem={({ item: { row, space } }) => (
+              <View style={{ paddingTop: space }}>
+                {row.kind === "separator" ? (
+                  <Text className="py-2 text-center text-[13px] leading-[18px] text-foreground-muted">
+                    {row.label}
                   </Text>
-                </View>
-              ) : row.kind === "pending" ? (
-                <View className="max-w-[85%] self-end">
-                  <UserBubble
-                    {...pendingContent(row.send)}
-                    files={row.send.file ? [row.send.file.name] : []}
-                    textStyle={styles.user.nativeTextStyle}
-                    onLinkPress={onLinkPress}
+                ) : row.kind === "task" ? (
+                  <TaskCard
+                    threadId={row.threadId}
+                    environmentIds={[row.environmentId, row.environmentId]}
+                    onOpen={openThread}
                   />
-                  {row.send.error !== null ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Message not sent. Retry sending message."
-                      onPress={() => void deliver(row.send)}
-                      className="min-h-12 flex-row items-center justify-end gap-1.5 self-end"
-                    >
-                      <SymbolView
-                        name="exclamationmark.circle"
-                        size={16}
-                        tintColorClassName="accent-danger-foreground"
-                        type="monochrome"
-                      />
-                      <Text className="text-[13px] leading-[18px] text-danger-foreground">
-                        Not sent · tap to retry
-                      </Text>
-                    </Pressable>
-                  ) : (
-                    <View className="mt-1 flex-row items-center justify-end gap-1">
-                      <SymbolView
-                        name="clock"
-                        size={12}
-                        tintColorClassName="accent-foreground-muted"
-                        type="monochrome"
-                      />
-                      <Text className="text-[13px] leading-[18px] text-foreground-muted">
-                        Sending…
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              ) : row.role === "assistant" ? (
-                <SwipeToReply onReply={() => startReply(row.text)}>
-                  <Pressable
-                    onLongPress={() => copyMessage(row.text)}
-                    className="max-w-[85%] self-start rounded-[20px] border border-border bg-card px-3.5 py-3"
+                ) : row.kind === "working" ? (
+                  <View
+                    accessible
+                    accessibilityLabel="Rajesh is working"
+                    accessibilityLiveRegion="polite"
+                    className="self-start rounded-[20px] border border-border bg-card px-3.5 py-2.5"
                   >
-                    <SelectableMarkdownText
-                      markdown={row.text}
-                      selectable={false}
-                      textStyle={styles.assistant.nativeTextStyle}
+                    <Text className="text-sm leading-5 text-foreground-muted">
+                      Rajesh is working…
+                    </Text>
+                  </View>
+                ) : row.kind === "pending" ? (
+                  <View className="max-w-[85%] self-end">
+                    <UserBubble
+                      {...pendingContent(row.send)}
+                      files={row.send.file ? [{ name: row.send.file.name, attachment: null }] : []}
+                      textStyle={styles.user.nativeTextStyle}
                       onLinkPress={onLinkPress}
                     />
-                  </Pressable>
-                </SwipeToReply>
-              ) : (
-                <View className="max-w-[85%] self-end">
-                  <UserBubble
-                    text={row.text}
-                    files={row.files}
-                    replyTo={row.replyTo}
-                    textStyle={styles.user.nativeTextStyle}
-                    onLinkPress={onLinkPress}
-                  />
+                    {row.send.error !== null ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Message not sent. Retry sending message."
+                        onPress={() => void deliver(row.send)}
+                        className="min-h-12 flex-row items-center justify-end gap-1.5 self-end"
+                      >
+                        <SymbolView
+                          name="exclamationmark.circle"
+                          size={16}
+                          tintColorClassName="accent-danger-foreground"
+                          type="monochrome"
+                        />
+                        <Text className="text-[13px] leading-[18px] text-danger-foreground">
+                          Not sent · tap to retry
+                        </Text>
+                      </Pressable>
+                    ) : (
+                      <View className="mt-1 flex-row items-center justify-end gap-1">
+                        <SymbolView
+                          name="clock"
+                          size={12}
+                          tintColorClassName="accent-foreground-muted"
+                          type="monochrome"
+                        />
+                        <Text className="text-[13px] leading-[18px] text-foreground-muted">
+                          Sending…
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                ) : row.role === "assistant" ? (
+                  <SwipeToReply onReply={() => startReply(row.text)}>
+                    <Pressable
+                      onLongPress={() => copyMessage(row.text)}
+                      className="max-w-[85%] gap-2 self-start rounded-[20px] border border-border bg-card px-3.5 py-3"
+                    >
+                      {row.text === "" ? null : (
+                        <SelectableMarkdownText
+                          markdown={row.text}
+                          selectable={false}
+                          textStyle={styles.assistant.nativeTextStyle}
+                          onLinkPress={onLinkPress}
+                        />
+                      )}
+                      {row.files.map((item) => (
+                        <FileChip
+                          key={item.attachment?.id ?? item.name}
+                          file={item}
+                          tone="assistant"
+                          opening={openingFile !== null && openingFile === item.attachment?.id}
+                          onOpen={openFile}
+                          onSave={saveFile}
+                        />
+                      ))}
+                    </Pressable>
+                  </SwipeToReply>
+                ) : (
+                  <View className="max-w-[85%] self-end">
+                    <UserBubble
+                      text={row.text}
+                      files={row.files}
+                      replyTo={row.replyTo}
+                      textStyle={styles.user.nativeTextStyle}
+                      onLinkPress={onLinkPress}
+                      openingFile={openingFile}
+                      onOpenFile={openFile}
+                      onSaveFile={saveFile}
+                    />
+                  </View>
+                )}
+              </View>
+            )}
+          />
+          {awayFrom === null ? null : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                unread > 0
+                  ? `Scroll to latest message, ${unread} new from Rajesh`
+                  : "Scroll to latest message"
+              }
+              onPress={scrollToLatest}
+              className="absolute right-4 bottom-3 h-12 w-12 items-center justify-center"
+            >
+              <View className="h-10 w-10 items-center justify-center rounded-full border border-border bg-card">
+                <SymbolView
+                  name="chevron.down"
+                  size={18}
+                  tintColorClassName="accent-foreground"
+                  type="monochrome"
+                />
+              </View>
+              {unread > 0 ? (
+                <View className="absolute top-0 right-0 h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1">
+                  <Text className="text-[11px] leading-4 font-t3-bold text-primary-foreground">
+                    {unread > 99 ? "99+" : unread}
+                  </Text>
                 </View>
-              )}
-            </View>
+              ) : null}
+            </Pressable>
           )}
-        />
+        </View>
       )}
+      <FilePreviewModal
+        source={imagePreview?.source ?? null}
+        onRequestClose={() => {
+          imagePreview?.dispose();
+          setImagePreview(null);
+        }}
+      />
       <View className="bg-screen px-3 pt-2" style={{ paddingBottom: Math.max(insets.bottom, 8) }}>
         {replyTo !== null ? (
           <View className="mb-2 flex-row items-center gap-2 rounded-2xl bg-grouped-card py-1 pl-3">
@@ -813,19 +1028,52 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   );
 }
 
-function SentFile({ name }: { readonly name: string }) {
-  return (
-    <View className="flex-row items-center gap-2">
+/** A file on a message. Tap opens it in the file viewer; a long press saves it to the device. */
+function FileChip(props: {
+  readonly file: RajeshFileRef;
+  readonly tone: "user" | "assistant";
+  readonly opening?: boolean;
+  readonly onOpen?: (file: RajeshFileRef) => void;
+  readonly onSave?: (file: RajeshFileRef) => void;
+}) {
+  const { file, onOpen, onSave } = props;
+  const user = props.tone === "user";
+  const image = file.attachment?.mime.startsWith("image/") === true;
+  const content = (
+    <>
       <SymbolView
-        name="doc.text"
+        name={image ? "photo" : "doc.text"}
         size={16}
-        tintColorClassName="accent-user-bubble-foreground"
+        tintColorClassName={user ? "accent-user-bubble-foreground" : "accent-foreground-muted"}
         type="monochrome"
       />
-      <Text numberOfLines={1} className="shrink text-sm leading-5 text-user-bubble-foreground">
-        {name}
+      <Text
+        numberOfLines={1}
+        className={`shrink text-sm leading-5 ${user ? "text-user-bubble-foreground" : "text-foreground"} ${onOpen && file.attachment ? "underline" : ""}`}
+      >
+        {file.name}
       </Text>
-    </View>
+      {props.opening ? (
+        <Text
+          className={`text-xs leading-4 ${user ? "text-user-bubble-foreground-muted" : "text-foreground-muted"}`}
+        >
+          Opening…
+        </Text>
+      ) : null}
+    </>
+  );
+  if (!onOpen) return <View className="flex-row items-center gap-2">{content}</View>;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${file.name}`}
+      accessibilityHint="Long press to save it to this device"
+      onPress={() => onOpen(file)}
+      onLongPress={onSave ? () => onSave(file) : undefined}
+      className="min-h-8 flex-row items-center gap-2"
+    >
+      {content}
+    </Pressable>
   );
 }
 
@@ -844,8 +1092,11 @@ type MarkdownTextProps = Pick<
 function UserBubble(
   props: MarkdownTextProps & {
     readonly text: string;
-    readonly files: ReadonlyArray<string>;
+    readonly files: ReadonlyArray<RajeshFileRef>;
     readonly replyTo: string | null;
+    readonly openingFile?: string | null;
+    readonly onOpenFile?: (file: RajeshFileRef) => void;
+    readonly onSaveFile?: (file: RajeshFileRef) => void;
   },
 ) {
   return (
@@ -871,8 +1122,15 @@ function UserBubble(
           onLinkPress={props.onLinkPress}
         />
       )}
-      {props.files.map((name) => (
-        <SentFile key={name} name={name} />
+      {props.files.map((file) => (
+        <FileChip
+          key={file.attachment?.id ?? file.name}
+          file={file}
+          tone="user"
+          opening={props.openingFile != null && props.openingFile === file.attachment?.id}
+          {...(props.onOpenFile ? { onOpen: props.onOpenFile } : {})}
+          {...(props.onSaveFile ? { onSave: props.onSaveFile } : {})}
+        />
       ))}
     </Pressable>
   );

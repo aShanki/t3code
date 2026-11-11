@@ -1,5 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 
+import { clearRajeshChatCache } from "./rajesh-chat-cache";
 import { rajeshDeviceKeyThumbprint, rajeshDeviceProof } from "./rajesh-device-key";
 import type { RajeshCursor, RajeshMessage, RajeshT3Thread } from "./rajesh-transcript";
 
@@ -14,7 +15,9 @@ export function readRajeshToken(baseUrl: string): Promise<string | null> {
   return SecureStore.getItemAsync(tokenKey(baseUrl), deviceOnly).catch(() => null);
 }
 
+/** Signing out (a null token) also forgets the chat kept on the device. */
 export function writeRajeshToken(baseUrl: string, token: string | null): Promise<void> {
+  if (token === null) clearRajeshChatCache(baseUrl);
   return token === null
     ? SecureStore.deleteItemAsync(tokenKey(baseUrl), deviceOnly)
     : SecureStore.setItemAsync(tokenKey(baseUrl), token, deviceOnly);
@@ -38,7 +41,9 @@ export function normalizeRajeshGateway(value: string): string | null {
   }
 }
 
-const REQUEST_TIMEOUT_MS = 30_000;
+// History is a few kilobytes in the chat view, so a silent connection is given up on, and
+// retried, sooner. Uploads and the long-poll set their own deadlines.
+const REQUEST_TIMEOUT_MS = 15_000;
 
 async function call<T>(
   baseUrl: string,
@@ -115,18 +120,25 @@ export const listRajeshTasks = (baseUrl: string, token: string) =>
 
 const taskPath = (key: string) => `/api/tasks/${encodeURIComponent(key)}`;
 
+/**
+ * The latest messages, without the tool activity the chat does not show. With the version of a
+ * copy already held, an unchanged chat answers `unchanged` instead. Gateways that predate the
+ * chat view send the full history and no version.
+ */
 export const readRajeshHistory = (
   baseUrl: string,
   token: string,
   key: string,
-  before?: RajeshCursor,
+  known: string | null,
 ) =>
-  call<{ readonly task: RajeshTaskSummary; readonly messages: ReadonlyArray<RajeshMessage> }>(
-    baseUrl,
-    taskPath(key) +
-      (before ? `?beforeTime=${before.time}&beforeId=${encodeURIComponent(before.id)}` : ""),
-    { token },
-  );
+  call<{
+    readonly task: RajeshTaskSummary;
+    readonly messages?: ReadonlyArray<RajeshMessage>;
+    readonly version?: string;
+    readonly unchanged?: boolean;
+  }>(baseUrl, `${taskPath(key)}?view=chat${known ? `&known=${encodeURIComponent(known)}` : ""}`, {
+    token,
+  });
 
 /** Messages after the cursor; waits up to `waitMs` for one, or for the run status to change. */
 export const readRajeshUpdates = (
@@ -147,10 +159,33 @@ export const readRajeshUpdates = (
     { token, signal: input.signal, timeoutMs: input.waitMs + 10_000 },
   );
 
-export const readRajeshT3Threads = (baseUrl: string, token: string, key: string) =>
-  call<{ readonly threads: ReadonlyArray<RajeshT3Thread> }>(baseUrl, `${taskPath(key)}/t3`, {
+export const readRajeshT3Threads = (
+  baseUrl: string,
+  token: string,
+  key: string,
+  known: string | null,
+) =>
+  call<{
+    readonly threads?: ReadonlyArray<RajeshT3Thread>;
+    readonly version?: string;
+    readonly unchanged?: boolean;
+  }>(baseUrl, `${taskPath(key)}/t3${known ? `?known=${encodeURIComponent(known)}` : ""}`, {
     token,
   });
+
+/**
+ * A single-use link, valid for a minute, to one file the session may read. The link carries no
+ * credentials, so a plain download can fetch it.
+ */
+export const rajeshFileLink = async (baseUrl: string, token: string, attachmentId: string) =>
+  baseUrl +
+  (
+    await call<{ readonly url: string }>(
+      baseUrl,
+      `/api/artifacts/${encodeURIComponent(attachmentId)}/ticket`,
+      { token, body: {} },
+    )
+  ).url;
 
 /** A file as the gateway takes it: base64 contents, one per message. */
 export interface RajeshFile {
