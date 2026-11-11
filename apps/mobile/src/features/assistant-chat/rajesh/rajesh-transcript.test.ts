@@ -178,7 +178,7 @@ describe("Rajesh transcript", () => {
         update("out:asked", 40, "question"),
         // The Discord echo of an update carries no card of its own.
         message("discord:personal:2", 41, "Update out:asked", true),
-        // An update Rajesh kept to itself shows nothing, card included.
+        // An update Rajesh kept to itself hides its text but still shows the task's card.
         { ...update("out:quiet", 50, "done"), text: "NO_REPLY" },
         update("out:other", 60, "failed", "other"),
         update("out:done", 70, "done"),
@@ -204,6 +204,7 @@ describe("Rajesh transcript", () => {
       ["task:env:idle", "idle", "started", true, null],
       "out:asked",
       ["task:out:asked", "thread", "question", false, "Fix the login"],
+      ["task:out:quiet", "thread", "done", false, "Fix the login"],
       "out:other",
       ["task:out:other", "other", "failed", true, "Fix the login"],
       "out:done",
@@ -232,6 +233,12 @@ describe("Rajesh transcript", () => {
         threads,
       ).map((entry) => (entry.kind === "task" ? [entry.moment, entry.latest] : entry.id)),
     ).toEqual([["ended", false], "discord:personal:9", "out:report", ["done", true]]);
+    // A silent report (NO_REPLY) still marks the task, and replaces the start card above it.
+    expect(
+      buildRajeshChatEntries([{ ...report, text: "NO_REPLY" }], threads).map((entry) =>
+        entry.kind === "task" ? [entry.moment, entry.latest] : entry.id,
+      ),
+    ).toEqual([["done", true]]);
   });
 });
 

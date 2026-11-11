@@ -205,18 +205,22 @@ export function buildRajeshChatEntries(
     const { text, files, replyTo } = message.bot
       ? rajeshBotContent(message)
       : rajeshUserContent(message);
-    if (text === "" && files.length === 0) continue;
-    // Progress is shown as the working indicator, not as messages.
-    if (message.bot && (text === "NO_REPLY" || ACTIVITY.test(text))) continue;
-    entries.push({
-      kind: "message",
-      id: message.id,
-      role: message.bot ? "assistant" : "user",
-      text,
-      files,
-      replyTo,
-      time: message.time,
-    });
+    // Progress is shown as the working indicator, not as messages, and NO_REPLY is silence.
+    const hidden =
+      (text === "" && files.length === 0) ||
+      (message.bot && (text === "NO_REPLY" || ACTIVITY.test(text)));
+    if (!hidden) {
+      entries.push({
+        kind: "message",
+        id: message.id,
+        role: message.bot ? "assistant" : "user",
+        text,
+        files,
+        replyTo,
+        time: message.time,
+      });
+    }
+    // A task update still shows its card when Rajesh had nothing to say about it.
     const update = taskUpdate(message);
     if (update) {
       entries.push({
@@ -253,8 +257,8 @@ export function buildRajeshChatEntries(
       !(
         entry.kind === "task" &&
         entry.messageId === null &&
-        entries[index + 1]?.kind === "message" &&
-        sameTask(entry, entries[index + 2])
+        (sameTask(entry, entries[index + 1]) ||
+          (entries[index + 1]?.kind === "message" && sameTask(entry, entries[index + 2])))
       ),
   );
   // Only a task's newest card is `latest`, so its status now is shown once. Every card of a
