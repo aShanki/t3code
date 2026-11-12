@@ -55,11 +55,14 @@ const ORIGIN_LABELS: Readonly<Record<TaskOrigin, string>> = {
 // T3's name for the space a task with no project runs in; it says nothing on a card.
 const NO_PROJECT = "No project";
 
+/** The project as a card names it, or null when there is none to name. */
+export const taskProjectLabel = (project: unknown): string | null =>
+  knownText(project) === NO_PROJECT ? null : knownText(project);
+
 /** A card's detail line: project, machine, model, origin. Unknown parts are left out. */
 export function taskMeta(details: TaskDetails): ReadonlyArray<string> {
-  const project = knownText(details.project);
   return [
-    project === NO_PROJECT ? null : project,
+    taskProjectLabel(details.project),
     knownText(details.machine),
     taskModelLabel(details.model),
     details.origin === null ? null : (ORIGIN_LABELS[details.origin] ?? null),

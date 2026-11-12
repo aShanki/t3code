@@ -8,7 +8,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { useProject, useThreadShell } from "../../state/entities";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { resolveThreadListV2Status } from "../threads/threadListV2";
-import { taskMeta, type TaskOrigin } from "./task-details";
+import { taskMeta, taskProjectLabel, type TaskOrigin } from "./task-details";
 
 type TaskStatus = ReturnType<typeof resolveThreadListV2Status> | "opening" | "stopped";
 
@@ -134,12 +134,34 @@ export function TaskCard(props: {
     ];
   const title = shell?.title ?? props.title ?? "New task";
   // Which project, where it runs, on what and from where: the detail line every card shares.
+  const projectName = project?.title ?? props.project ?? null;
   const meta = taskMeta({
-    project: project?.title ?? props.project ?? null,
+    project: projectName,
     machine: machine ?? props.machine ?? null,
     model: shell?.modelSelection.model ?? props.model ?? null,
     origin: props.origin ?? null,
   });
+  // A long project name is cut short before the parts after it are.
+  const lead = taskProjectLabel(projectName);
+  const rest = meta.slice(lead === null ? 0 : 1).join(" · ");
+  const details = (size: string) =>
+    meta.length === 0 ? null : (
+      <View className="min-w-0 flex-row">
+        {lead === null ? null : (
+          <Text numberOfLines={1} className={`shrink ${size} text-foreground-muted`}>
+            {lead}
+          </Text>
+        )}
+        {rest === "" ? null : (
+          <Text
+            numberOfLines={1}
+            className={`${lead === null ? "shrink" : "shrink-0"} ${size} text-foreground-muted`}
+          >
+            {lead === null ? rest : ` · ${rest}`}
+          </Text>
+        )}
+      </View>
+    );
   const context = meta.join(" · ");
   if (props.compact) {
     const record = MOMENT_RECORD[moment];
@@ -163,11 +185,7 @@ export function TaskCard(props: {
             </Text>
             {` · ${title}`}
           </Text>
-          {meta.length ? (
-            <Text numberOfLines={1} className="text-xs leading-4 text-foreground-muted">
-              {meta.join(" · ")}
-            </Text>
-          ) : null}
+          {details("text-xs leading-4")}
         </View>
         <SymbolView
           name="chevron.right"
@@ -205,11 +223,7 @@ export function TaskCard(props: {
       >
         {title}
       </Text>
-      {context ? (
-        <Text numberOfLines={1} className="mt-1 text-[13px] leading-[18px] text-foreground-muted">
-          {context}
-        </Text>
-      ) : null}
+      {meta.length ? <View className="mt-1">{details("text-[13px] leading-[18px]")}</View> : null}
       <View className="mt-3 flex-row items-center border-t border-border pt-2.5">
         <Text className="flex-1 text-sm font-t3-medium text-primary-text">Open thread</Text>
         <SymbolView
