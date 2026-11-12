@@ -612,12 +612,15 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
       replyTo === null ? message : rajeshReplyText(replyTo, message),
       files,
     );
+    // At the latest message before the bubble is added, the list follows it rather than holding
+    // the older page in place; a smooth scroll would still be running when the bubble lands.
+    list.current?.scrollToOffset({ offset: 0, animated: false });
     setPending((all) => [...all, send]);
     setText("");
     setAttachments([]);
     void releaseUnusedComposerAttachmentFiles(drafts);
     setReplyTo(null);
-    // The new bubble is laid out first; the list then scrolls to it (see onContentSizeChange).
+    // And once the bubble is laid out, in case the jump had not landed yet.
     followSend.current = true;
     void deliver(send);
   };
@@ -831,7 +834,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
             onContentSizeChange={() => {
               if (!followSend.current) return;
               followSend.current = false;
-              scrollToLatest();
+              list.current?.scrollToOffset({ offset: 0, animated: false });
             }}
             scrollEventThrottle={100}
             onScroll={(event) => {
