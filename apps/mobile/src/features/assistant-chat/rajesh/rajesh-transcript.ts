@@ -251,16 +251,19 @@ export function buildRajeshChatEntries(
   }
   // The sort is stable, so an update's card stays directly under its message.
   entries.sort((a, b) => a.time - b.time);
-  // A start card directly above the same task's update would show the task twice in a row.
-  const shown = entries.filter(
-    (entry, index) =>
-      !(
-        entry.kind === "task" &&
-        entry.messageId === null &&
-        (sameTask(entry, entries[index + 1]) ||
-          (entries[index + 1]?.kind === "message" && sameTask(entry, entries[index + 2])))
-      ),
-  );
+  // A card with no message of its own (a start, or an update Rajesh stayed silent on) directly
+  // above the same task's next card would show the task twice in a row. A silent update is
+  // only dropped for a card that says the same thing.
+  const shown = entries.filter((entry, index) => {
+    if (entry.kind !== "task") return true;
+    const silent = entry.messageId !== null && entries[index - 1]?.id !== entry.messageId;
+    const next = entries[index + 1]?.kind === "message" ? entries[index + 2] : entries[index + 1];
+    return !(
+      next?.kind === "task" &&
+      sameTask(entry, next) &&
+      (entry.messageId === null || (silent && entry.moment === next.moment))
+    );
+  });
   // Only a task's newest card is `latest`, so its status now is shown once. Every card of a
   // task carries the newest name any update gave it.
   const titles = new Map<string, string | null>();

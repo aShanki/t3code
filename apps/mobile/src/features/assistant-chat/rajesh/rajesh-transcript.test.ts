@@ -239,6 +239,29 @@ describe("Rajesh transcript", () => {
         entry.kind === "task" ? [entry.moment, entry.latest] : entry.id,
       ),
     ).toEqual([["done", true]]);
+    // Silent reports in a row, or one directly above a written one, say the same thing once;
+    // a silent report that says something else stays.
+    const silent = (id: string, time: number, event: string): RajeshMessage => ({
+      ...message(id, time, "NO_REPLY", true),
+      t3: { environmentId: "env", threadId: "mine", event } as RajeshMessage["t3"],
+    });
+    expect(
+      buildRajeshChatEntries(
+        [
+          silent("out:q1", 31, "done"),
+          silent("out:q2", 32, "done"),
+          silent("out:q3", 33, "question"),
+          silent("out:q4", 34, "done"),
+          { ...report, time: 35 },
+        ],
+        [],
+      ).map((entry) => (entry.kind === "task" ? [entry.id, entry.moment] : entry.id)),
+    ).toEqual([
+      ["task:out:q2", "done"],
+      ["task:out:q3", "question"],
+      "out:report",
+      ["task:out:report", "done"],
+    ]);
   });
 });
 
