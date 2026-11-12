@@ -8,40 +8,71 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import { supportsAndroidChatPush } from "../agent-awareness/androidNotifications";
+import { rajeshPushStatusAtom, type RajeshPushStatus } from "../assistant-chat/rajesh/rajesh-push";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 
-/** A personal fork's notifications: raised on this device instead of pushed by T3's relay. */
+const PUSH_STATUS_TEXT: Record<RajeshPushStatus, string | null> = {
+  off: null,
+  on: "Push is set up on this device.",
+  connecting: "Setting up push…",
+  unpaired: "Connect to Rajesh in the Chat tab to receive push notifications.",
+  blocked: null,
+  unavailable:
+    "Push could not be set up. It needs Google Play services and a connection to Rajesh, and is tried again each time the app opens.",
+};
+
+/** A personal fork's notifications: pushed by its own Rajesh gateway, or raised on this device. */
 export function LocalNotificationsSettings() {
   const preferences = useAtomValue(mobilePreferencesAtom);
   const save = useAtomSet(updateMobilePreferencesAtom);
-  const enabled =
-    AsyncResult.isSuccess(preferences) && preferences.value.localAgentAlertsEnabled !== false;
-  const [blocked, setBlocked] = useState(false);
-  const setEnabled = (value: boolean) => {
-    save({ localAgentAlertsEnabled: value });
-    if (!value) return;
+  const loaded = AsyncResult.isSuccess(preferences);
+  const alertsEnabled = loaded && preferences.value.localAgentAlertsEnabled !== false;
+  const pushEnabled = loaded && preferences.value.rajeshPushEnabled !== false;
+  const pushStatus = useAtomValue(rajeshPushStatusAtom);
+  const [denied, setDenied] = useState(false);
+  const blocked = denied || (pushEnabled && pushStatus === "blocked");
+  const askPermission = () =>
     void Notifications.getPermissionsAsync()
       .then((status) =>
         status.granted || !status.canAskAgain ? status : Notifications.requestPermissionsAsync(),
       )
-      .then((status) => setBlocked(!status.granted))
-      .catch(() => setBlocked(true));
-  };
+      .then((status) => setDenied(!status.granted))
+      .catch(() => setDenied(true));
+  const pushText = pushEnabled ? PUSH_STATUS_TEXT[pushStatus] : null;
   return (
     <SettingsScreen title="Notifications">
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerClassName="gap-6 px-5 pt-4"
       >
+        {supportsAndroidChatPush() ? (
+          <SettingsSection title="Rajesh">
+            <SettingsSwitchRow
+              icon="questionmark.bubble"
+              label="Push notifications"
+              subtitle="Rajesh's messages and task updates: finished, failed, questions and approvals. Delivered even when the app is closed."
+              value={loaded ? pushEnabled : null}
+              onValueChange={(value) => {
+                save({ rajeshPushEnabled: value });
+                if (value) askPermission();
+              }}
+            />
+          </SettingsSection>
+        ) : null}
+        {pushText ? <Text className="text-sm text-foreground-muted">{pushText}</Text> : null}
         <SettingsSection title="Agent activity">
           <SettingsSwitchRow
             icon="bell.badge"
             label="Agent alerts"
-            subtitle="Approvals, questions, and finished or failed threads, as T3 Code notifies them. While on, a silent notification keeps this app connected in the background."
-            value={AsyncResult.isSuccess(preferences) ? enabled : null}
-            onValueChange={setEnabled}
+            subtitle="Approvals, questions, and finished or failed threads, raised by this device the moment they happen. While on, a silent notification keeps this app connected in the background."
+            value={loaded ? alertsEnabled : null}
+            onValueChange={(value) => {
+              save({ localAgentAlertsEnabled: value });
+              if (value) askPermission();
+            }}
           />
         </SettingsSection>
         {blocked ? (
@@ -53,8 +84,8 @@ export function LocalNotificationsSettings() {
           </>
         ) : null}
         <Text className="text-sm text-foreground-muted">
-          This build cannot receive T3 Connect push notifications, so alerts arrive only while
-          Android keeps the app running.
+          Agent alerts come from the app's own connections, so they stop when Android closes the
+          app. Push notifications do not.
         </Text>
       </ScrollView>
     </SettingsScreen>

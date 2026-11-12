@@ -10,6 +10,10 @@
 #   ANDROID_HOME                Android SDK with build-tools
 #   RAJESH_CHAT_ABIS            optional, defaults to arm64-v8a,x86_64: phones use arm64, and
 #                               x86_64 lets an emulator run a release before a phone installs it
+#   T3CODE_ANDROID_GOOGLE_SERVICES_FILE
+#                               Firebase client config (google-services.json) for this package,
+#                               from the project whose service account the gateway sends with.
+#                               Without it the build cannot receive push notifications.
 set -euo pipefail
 
 # SHA-256 of the release signing certificate. Android refuses updates signed by any other key.
@@ -21,6 +25,10 @@ publish="${2:-}"
 [[ "$version_code" =~ ^[1-9][0-9]*$ ]] || { echo "version code must be a positive integer" >&2; exit 1; }
 [[ -z "$publish" || "$publish" == --publish ]] || { echo "unknown option: $publish" >&2; exit 1; }
 : "${RAJESH_CHAT_SIGN:?}" "${EXPO_PUBLIC_RAJESH_GATEWAY:?}" "${ANDROID_HOME:?}"
+if [[ -n "$publish" ]]; then
+  [[ -f "${T3CODE_ANDROID_GOOGLE_SERVICES_FILE:-}" ]] ||
+    { echo "set T3CODE_ANDROID_GOOGLE_SERVICES_FILE: a published build must receive push" >&2; exit 1; }
+fi
 
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 tag="rajesh-chat-v$version_code"

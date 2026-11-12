@@ -139,6 +139,8 @@ export interface Preferences {
   readonly rajeshChat?: RajeshChat | undefined;
   /** Personal forks: alerts raised on this device from its environment connections. */
   readonly localAgentAlertsEnabled?: boolean;
+  /** Rajesh chat: messages and task updates pushed by the gateway. On unless turned off. */
+  readonly rajeshPushEnabled?: boolean;
   readonly modelFavorites?: ReadonlyArray<{
     readonly provider: ProviderInstanceId;
     readonly model: string;
@@ -226,6 +228,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     assistantChat?: AssistantChat;
     rajeshChat?: RajeshChat;
     localAgentAlertsEnabled?: boolean;
+    rajeshPushEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
@@ -357,6 +360,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.localAgentAlertsEnabled === "boolean") {
     preferences.localAgentAlertsEnabled = parsed.localAgentAlertsEnabled;
+  }
+  if (typeof parsed.rajeshPushEnabled === "boolean") {
+    preferences.rajeshPushEnabled = parsed.rajeshPushEnabled;
   }
   if (isRajeshChat(parsed.rajeshChat)) {
     preferences.rajeshChat = parsed.rajeshChat;

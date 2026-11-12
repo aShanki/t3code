@@ -70,6 +70,47 @@ abstract class AgentNotificationsFixture {
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [24, 26, 33, 36], manifest = Config.NONE)
 class AgentNotificationsTest : AgentNotificationsFixture() {
+  private fun chat(id: String, sentAt: Long = System.currentTimeMillis()) = mapOf(
+    "t3_kind" to "chat_message",
+    "alert_id" to id,
+    "alert_title" to "Rajesh",
+    "alert_body" to "The build is green.",
+    "alert_path" to "/chat",
+    "sent_at" to sentAt.toString(),
+  )
+
+  @Test
+  fun pushedChatMessagesShowOnceUnlessTheChatIsOpenOrChatPushIsOff() {
+    AgentNotifications.receiveChat(context, chat("off"))
+    assertTrue(manager.activeNotifications.isEmpty())
+
+    AgentNotifications.setChatPush(context, "t3code-chat")
+    AgentNotifications.receiveChat(context, chat("stale", System.currentTimeMillis() - 11 * 60 * 1000))
+    assertTrue(manager.activeNotifications.isEmpty())
+    AgentNotifications.receiveChat(context, chat("one"))
+    AgentNotifications.receiveChat(context, chat("one"))
+    val shown = manager.activeNotifications.single()
+    assertEquals("Rajesh", shown.notification.extras.getString(Notification.EXTRA_TITLE))
+    assertEquals(
+      "t3code-chat://chat",
+      shadowOf(shown.notification.contentIntent).savedIntent.dataString
+    )
+    if (Build.VERSION.SDK_INT >= 26) assertEquals("chat-messages", shown.notification.channelId)
+
+    // Open on the chat, the app shows the message itself; on another screen it still alerts.
+    lifecycle.currentState = Lifecycle.State.RESUMED
+    AgentNotifications.setChatOnScreen(true)
+    AgentNotifications.receiveChat(context, chat("two"))
+    assertEquals(1, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+    AgentNotifications.setChatOnScreen(false)
+    AgentNotifications.receiveChat(context, chat("three"))
+    assertEquals(2, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+
+    AgentNotifications.setChatPush(context, null)
+    AgentNotifications.receiveChat(context, chat("four"))
+    assertEquals(2, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+  }
+
   @Test
   fun alertHistoryEvictsOnlyTheOldestEntryAfterCapacity() {
     lifecycle.currentState = Lifecycle.State.RESUMED

@@ -60,6 +60,14 @@ class T3AgentNotificationsModule : Module() {
       AgentNotifications.setThreadOnScreen(path)
     }
 
+    Function("setChatPush") { scheme: String? ->
+      appContext.reactContext?.let { AgentNotifications.setChatPush(it, scheme) }
+    }
+
+    Function("setChatOnScreen") { visible: Boolean ->
+      AgentNotifications.setChatOnScreen(visible)
+    }
+
     Function("openLiveUpdateSettings") {
       val context = appContext.reactContext
       if (context == null || Build.VERSION.SDK_INT < 36) {

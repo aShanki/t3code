@@ -38,6 +38,8 @@ import {
   setAgentNotificationPathname,
 } from "./features/agent-awareness/notificationNavigation";
 import { installLocalAgentAlerts } from "./features/agent-awareness/localAgentAlertsService";
+import { takeChatLink } from "./features/assistant-chat/chat-link";
+import { installRajeshPush } from "./features/assistant-chat/rajesh/rajesh-push";
 import {
   installAppShortcuts,
   recordAppShortcutNavigationState,
@@ -114,7 +116,7 @@ const linkingConfig = {
 
 function getAppStateFromPath(path: string, options: Parameters<typeof getStateFromPath>[1]) {
   return pipe(
-    getStateFromPath(path, options),
+    getStateFromPath(takeChatLink(path), options),
     (state) => restoreDraftLinkState(state, path),
     (state) => restoreSettingsLinkState(state, settingsLinkPage()),
     takeThreadPromptLink,
@@ -199,6 +201,7 @@ const appServiceDisposers = [
   startIncomingShareInbox(),
   installAgentNotificationNavigation(linkToAppPath),
   installLocalAgentAlerts(),
+  installRajeshPush(),
   installAppShortcuts(linkToAppPath),
   installAppUpdateChecks(),
   installRajeshUpdateChecks(),

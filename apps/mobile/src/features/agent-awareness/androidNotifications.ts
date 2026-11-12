@@ -15,6 +15,8 @@ interface AndroidAgentNotifications {
   ): void;
   cancelLocalLater?(key: string): void;
   setBackgroundConnection?(enabled: boolean, text: string): void;
+  setChatPush?(scheme: string | null): void;
+  setChatOnScreen?(visible: boolean): void;
   openLiveUpdateSettings?(): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
 }
@@ -71,6 +73,21 @@ export function cancelLocalAndroidAgentAlert(key: string): void {
 
 export function setAndroidBackgroundConnection(enabled: boolean, text: string): void {
   native?.setBackgroundConnection?.(enabled, text);
+}
+
+/** Whether a build's native side supports chat messages pushed by a personal fork's server. */
+export function supportsAndroidChatPush(): boolean {
+  return typeof native?.setChatPush === "function";
+}
+
+/** Pushed chat messages are shown only while this is on; it survives the app being closed. */
+export function setAndroidChatPush(enabled: boolean): void {
+  native?.setChatPush?.(enabled ? appScheme() : null);
+}
+
+/** While the chat is on screen in the open app, its pushed messages are not also notified. */
+export function setAndroidChatOnScreen(visible: boolean): void {
+  native?.setChatOnScreen?.(visible);
 }
 
 export function setAndroidThreadOnScreen(path: string | null): void {

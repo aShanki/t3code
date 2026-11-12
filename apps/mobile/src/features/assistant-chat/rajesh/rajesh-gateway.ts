@@ -218,3 +218,21 @@ export const stopRajesh = (baseUrl: string, token: string, key: string, requestI
 
 export const logoutRajesh = (baseUrl: string, token: string) =>
   call<{ readonly ok: boolean }>(baseUrl, "/api/logout", { token, body: {} });
+
+/** Asks the gateway to push this chat's new messages to the device's Firebase token. */
+export const registerRajeshPush = (
+  baseUrl: string,
+  token: string,
+  key: string,
+  pushToken: string,
+) =>
+  call<{ readonly ok: boolean }>(baseUrl, "/api/push/register", {
+    token,
+    body: { token: pushToken, task: key },
+  });
+
+export const unregisterRajeshPush = (baseUrl: string, token: string, pushToken: string) =>
+  call<{ readonly ok: boolean }>(baseUrl, "/api/push/unregister", {
+    token,
+    body: { token: pushToken },
+  });

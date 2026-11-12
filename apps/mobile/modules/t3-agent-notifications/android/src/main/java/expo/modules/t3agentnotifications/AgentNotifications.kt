@@ -22,10 +22,10 @@ import expo.modules.notifications.service.ExpoFirebaseMessagingService
 
 class AgentMessagingService : ExpoFirebaseMessagingService() {
   override fun onMessageReceived(remoteMessage: RemoteMessage) {
-    if (remoteMessage.data["t3_kind"] == "agent_activity") {
-      AgentNotifications.receive(this, remoteMessage.data)
-    } else {
-      super.onMessageReceived(remoteMessage)
+    when (remoteMessage.data["t3_kind"]) {
+      "agent_activity" -> AgentNotifications.receive(this, remoteMessage.data)
+      "chat_message" -> AgentNotifications.receiveChat(this, remoteMessage.data)
+      else -> super.onMessageReceived(remoteMessage)
     }
   }
 }
@@ -48,6 +48,8 @@ object AgentNotifications {
   private const val LOCAL_STORE = "t3-agent-notifications-local"
   private const val ACTIVITY_CHANNEL = "agent-activity"
   private const val ALERT_CHANNEL = "agent-alerts"
+  private const val CHAT_CHANNEL = "chat-messages"
+  private const val CHAT_PATH = "/chat"
   private const val ACTIVITY_TAG = "t3-agent-activity"
   private const val ALERT_TAG = "t3-agent-alert"
   private const val ACTIVITY_ID = 73001
@@ -126,10 +128,41 @@ object AgentNotifications {
     pendingLocal.remove(key)?.let { delayed.removeCallbacks(it) }
   }
 
+  /**
+   * A personal fork's own server pushes its chat's messages. `scheme` is kept on disk because
+   * a push can arrive with no JavaScript running; clearing it turns these pushes off.
+   */
+  fun setChatPush(context: Context, scheme: String?) {
+    context.getSharedPreferences(LOCAL_STORE, Context.MODE_PRIVATE).edit().apply {
+      if (scheme == null) remove("chatScheme") else putString("chatScheme", scheme)
+    }.apply()
+  }
+
+  @Synchronized
+  fun receiveChat(context: Context, data: Map<String, String>) {
+    val prefs = context.getSharedPreferences(LOCAL_STORE, Context.MODE_PRIVATE)
+    val scheme = prefs.getString("chatScheme", null) ?: return
+    val sentAt = data["sent_at"]?.toLongOrNull() ?: return
+    val fresh = System.currentTimeMillis() - sentAt in -MAX_MESSAGE_AGE_MS..MAX_MESSAGE_AGE_MS
+    if (!fresh || !NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+    channels(context)
+    if (Build.VERSION.SDK_INT >= 26) {
+      manager(context).createNotificationChannel(
+        NotificationChannel(CHAT_CHANNEL, "Chat messages", NotificationManager.IMPORTANCE_HIGH)
+      )
+    }
+    showAlert(context, prefs, scheme, data + mapOf("alert_group" to CHAT_CHANNEL), CHAT_CHANNEL)
+  }
+
   @Volatile private var threadOnScreen: String? = null
+  @Volatile private var chatOnScreen = false
 
   fun setThreadOnScreen(path: String?) {
     threadOnScreen = path
+  }
+
+  fun setChatOnScreen(visible: Boolean) {
+    chatOnScreen = visible
   }
 
   @Synchronized
@@ -171,7 +204,8 @@ object AgentNotifications {
     context: Context,
     prefs: SharedPreferences,
     scheme: String,
-    data: Map<String, String>
+    data: Map<String, String>,
+    channel: String = ALERT_CHANNEL
   ): Boolean {
     // Queue retries carry the same alert id. Keep a bounded history even when
     // notification A is retried after notification B has already arrived.
@@ -184,9 +218,12 @@ object AgentNotifications {
         Lifecycle.State.RESUMED
       )
       val visibleThread = threadOnScreen
-      val onScreen = resumed && visibleThread != null && data["alert_path"] == visibleThread
+      val onScreen = resumed && (
+        (visibleThread != null && data["alert_path"] == visibleThread) ||
+          (chatOnScreen && data["alert_path"] == CHAT_PATH)
+        )
       if (!onScreen) {
-        postAlert(context, scheme, data, alertId)
+        postAlert(context, scheme, data, alertId, channel)
       }
       prefs.edit().remove("seenAlerts").putString(
         "seenAlertsOrdered",
@@ -195,7 +232,7 @@ object AgentNotifications {
       // Android drops posts to a blocked channel, so that alert shows nothing.
       return !onScreen && (
         Build.VERSION.SDK_INT < 26 ||
-          manager(context).getNotificationChannel(ALERT_CHANNEL)?.importance !=
+          manager(context).getNotificationChannel(channel)?.importance !=
           NotificationManager.IMPORTANCE_NONE
         )
     }
@@ -206,14 +243,15 @@ object AgentNotifications {
     context: Context,
     scheme: String,
     data: Map<String, String>,
-    alertId: String
+    alertId: String,
+    channel: String = ALERT_CHANNEL
   ) {
     val title = data["alert_title"].orEmpty().take(120)
     // Grouped alerts list up to five 120-character thread titles.
     val body = data["alert_body"].orEmpty().take(608)
     val id = alertId.hashCode()
     val group = data["alert_group"]?.takeIf { it.isNotBlank() } ?: ALERT_TAG
-    val notification = base(context, ALERT_CHANNEL)
+    val notification = base(context, channel)
       .setContentTitle(title).setContentText(body)
       .setStyle(NotificationCompat.BigTextStyle().bigText(body))
       .setAutoCancel(true)
@@ -229,7 +267,7 @@ object AgentNotifications {
       children.forEach {
         style.addLine(it.notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT))
       }
-      val summary = base(context, ALERT_CHANNEL)
+      val summary = base(context, channel)
         .setContentTitle(title)
         .setContentText(body)
         .setStyle(style)
@@ -397,14 +435,14 @@ object AgentNotifications {
     NotificationCompat.Builder(context, channel)
       .setPriority(
         if (channel ==
-          ALERT_CHANNEL
+          ACTIVITY_CHANNEL
         ) {
-          NotificationCompat.PRIORITY_HIGH
-        } else {
           NotificationCompat.PRIORITY_LOW
+        } else {
+          NotificationCompat.PRIORITY_HIGH
         }
       )
-      .setDefaults(if (channel == ALERT_CHANNEL) Notification.DEFAULT_ALL else 0)
+      .setDefaults(if (channel == ACTIVITY_CHANNEL) 0 else Notification.DEFAULT_ALL)
       .setSmallIcon(R.drawable.agent_activity_mark)
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
       .setShowWhen(false)
@@ -416,7 +454,8 @@ object AgentNotifications {
     id: Int
   ): PendingIntent? {
     val threadPath = path?.takeIf { it.startsWith("/threads/") }
-    val route = threadPath?.takeUnless { it.contains('?') || it.contains('#') } ?: "/"
+    val route = threadPath?.takeUnless { it.contains('?') || it.contains('#') }
+      ?: if (path == CHAT_PATH) CHAT_PATH else "/"
     val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
       ?: return null
     intent.setAction(Intent.ACTION_VIEW).setData(Uri.parse("$scheme:/$route"))

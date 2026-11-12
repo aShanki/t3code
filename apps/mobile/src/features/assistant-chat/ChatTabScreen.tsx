@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useNavigation } from "@react-navigation/native";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -13,7 +13,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FlatList, Linking, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -45,7 +45,9 @@ import {
   useRemoteEnvironmentRuntime,
 } from "../../state/use-remote-environment-registry";
 import { useThreadOutboxMessages } from "../../state/use-thread-outbox";
+import { setAndroidChatOnScreen } from "../agent-awareness/androidNotifications";
 import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
+import { useWorkspaceTabs } from "../layout/workspace/WorkspaceTabsContext";
 import { openSettings } from "../settings/settings-navigation";
 import { useMarkdownStyles } from "../threads/ThreadFeed";
 import { resolveThreadListV2Status } from "../threads/threadListV2";
@@ -64,6 +66,14 @@ export function ChatTabScreen() {
   const chat = useAssistantChat();
   const rajesh = useRajeshChat();
   const [useT3Thread, setUseT3Thread] = useState(false);
+  const focused = useIsFocused();
+  const chatTabSelected = useWorkspaceTabs()?.state.selectedTab === "chat";
+  const rajeshOnScreen = rajesh != null && focused && chatTabSelected;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- tells the native notifier the chat is visible, so a pushed message is not also notified
+  useEffect(() => {
+    setAndroidChatOnScreen(rajeshOnScreen);
+    return () => setAndroidChatOnScreen(false);
+  }, [rajeshOnScreen]);
   if (chat === undefined || rajesh === undefined) {
     return (
       <View className="flex-1 bg-screen">

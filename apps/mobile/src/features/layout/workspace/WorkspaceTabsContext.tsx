@@ -1,6 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { createContext, use, useState, type Dispatch, type ReactNode } from "react";
+import { createContext, use, useEffect, useState, type Dispatch, type ReactNode } from "react";
 
 import { mobilePreferencesAtom } from "../../../state/preferences";
 import {
@@ -28,6 +28,12 @@ export const WorkspaceTabsContext = createContext<{
   readonly recordScrollOffset: (tab: WorkspaceSearchTab, offset: number) => void;
 } | null>(null);
 
+/** A tab asked for from outside the tree, such as by a notification tap; cleared once selected. */
+export const requestedWorkspaceTabAtom = Atom.make<WorkspaceTab | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:workspace-tabs:requested"),
+);
+
 export function useWorkspaceTabs() {
   return use(WorkspaceTabsContext);
 }
@@ -52,8 +58,10 @@ function resolveWorkspaceTabsSelection(
 
 // One model per provider. Handlers on frozen screens keep stale closures, so
 // they read the current selection from the registry at call time.
-function createWorkspaceTabsModel() {
-  const stored = Atom.make(initialWorkspaceTabsState());
+function createWorkspaceTabsModel(requested: WorkspaceTab | null) {
+  // A cold start from a notification opens on the tab it asked for, with no first frame elsewhere.
+  const initial = initialWorkspaceTabsState();
+  const stored = Atom.make(requested === null ? initial : { ...initial, selectedTab: requested });
   const scrollOffsets: Record<WorkspaceSearchTab, number> = {
     chat: 0,
     threads: 0,
@@ -78,8 +86,18 @@ export function WorkspaceTabsProvider(props: {
   readonly settingsOpen?: boolean;
 }) {
   const registry = use(RegistryContext);
-  const [model] = useState(createWorkspaceTabsModel);
+  const [model] = useState(() => createWorkspaceTabsModel(registry.get(requestedWorkspaceTabAtom)));
   const state = useAtomValue(model.resolved);
+  const requested = useAtomValue(requestedWorkspaceTabAtom);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies a tab selection requested outside React, by a notification tap
+  useEffect(() => {
+    if (requested === null) return;
+    registry.set(
+      model.stored,
+      workspaceTabsReducer(registry.get(model.resolved), { type: "select", tab: requested }),
+    );
+    registry.set(requestedWorkspaceTabAtom, null);
+  }, [requested, registry, model]);
   const context = {
     state,
     dispatch: (action: WorkspaceTabsAction) =>
