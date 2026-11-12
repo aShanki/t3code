@@ -1158,7 +1158,9 @@ function FileChip(props: {
       />
       <Text
         numberOfLines={1}
-        className={`shrink text-sm leading-5 ${user ? "text-user-bubble-foreground" : "text-foreground"} ${onOpen && file.attachment ? "underline" : ""}`}
+        className={`shrink text-sm leading-5 ${user ? "text-user-bubble-foreground" : "text-foreground"}`}
+        // An explicit style: the underline is what marks a file as one that opens.
+        style={onOpen && file.attachment ? { textDecorationLine: "underline" } : undefined}
       >
         {file.name}
       </Text>
