@@ -187,11 +187,50 @@ export const rajeshFileLink = async (baseUrl: string, token: string, attachmentI
     )
   ).url;
 
-/** A file as the gateway takes it: base64 contents, up to ten per message. */
+/** A file sent inline as base64, for gateways without streamed uploads (8 MB per message). */
 export interface RajeshFile {
   readonly name: string;
   readonly mime?: string;
   readonly data: string;
+}
+
+/** A file on the device that a message sends; it is uploaded on its own first. */
+export interface RajeshOutgoingFile {
+  readonly uploadId: string;
+  readonly name: string;
+  readonly mime: string;
+  readonly uri: string;
+  readonly size: number;
+}
+
+/**
+ * Streams one file to the gateway's staging area, straight from disk. Idempotent per upload ID.
+ * A gateway without streamed uploads answers 404.
+ */
+export async function uploadRajeshFile(
+  baseUrl: string,
+  token: string,
+  key: string,
+  file: RajeshOutgoingFile,
+  onProgress?: (sentBytes: number) => void,
+): Promise<void> {
+  const path = `${taskPath(key)}/uploads/${file.uploadId}`;
+  const proof = await rajeshDeviceProof(baseUrl, "PUT", path);
+  const { File, UploadType } = await import("expo-file-system");
+  const result = await new File(file.uri).upload(baseUrl + path, {
+    httpMethod: "PUT",
+    uploadType: UploadType.BINARY_CONTENT,
+    mimeType: "application/octet-stream",
+    headers: { Authorization: `Bearer ${token}`, DPoP: proof },
+    ...(onProgress ? { onProgress: (progress) => onProgress(progress.bytesSent) } : {}),
+  });
+  if (result.status === 200) return;
+  let message = `Rajesh returned ${result.status}.`;
+  try {
+    const parsed = JSON.parse(result.body);
+    if (typeof parsed?.error === "string") message = parsed.error;
+  } catch {}
+  throw Object.assign(new Error(message), { status: result.status });
 }
 
 /** Idempotent per request ID: a retry after a lost reply is not sent twice. */
@@ -201,13 +240,15 @@ export const sendRajeshMessage = (
   key: string,
   requestId: string,
   text: string,
-  files: ReadonlyArray<RajeshFile>,
+  files: ReadonlyArray<
+    RajeshFile | { readonly name: string; readonly mime: string; readonly upload: string }
+  >,
 ) =>
   call<{ readonly accepted: boolean }>(baseUrl, `${taskPath(key)}/messages`, {
     token,
     body: { requestId, text, ...(files.length > 0 ? { files } : {}) },
-    // An upload of several megabytes over a slow connection needs longer than a plain request.
-    ...(files.length > 0 ? { timeoutMs: 120_000 } : {}),
+    // Inline files of several megabytes over a slow connection need longer than a plain request.
+    ...(files.some((file) => "data" in file) ? { timeoutMs: 120_000 } : {}),
   });
 
 export const stopRajesh = (baseUrl: string, token: string, key: string, requestId: string) =>

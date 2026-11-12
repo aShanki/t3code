@@ -69,12 +69,13 @@ import {
   readRajeshToken,
   readRajeshUpdates,
   sendRajeshMessage,
+  uploadRajeshFile,
   startRajeshDevice,
   writeRajeshToken,
   type RajeshDeviceLogin,
-  type RajeshFile,
+  type RajeshOutgoingFile,
 } from "./rajesh-gateway";
-import { attachmentsForRajesh, checkRajeshAttachments } from "./rajesh-attachment";
+import { checkRajeshAttachments, filesForRajesh, inlineRajeshFiles } from "./rajesh-attachment";
 import {
   clearRajeshChatCache,
   readRajeshChatCache,
@@ -481,17 +482,29 @@ function useRajeshFeed(chat: RajeshChat, token: string | null) {
 interface PendingSend {
   readonly requestId: string;
   readonly text: string;
-  readonly files: ReadonlyArray<RajeshFile>;
+  readonly files: ReadonlyArray<RajeshOutgoingFile>;
+  /** The composer's copies, kept until the gateway accepts the message so a retry can resend. */
+  readonly drafts: ReadonlyArray<DraftComposerAttachment>;
+  readonly cleanup: () => void;
   readonly sentAt: number;
+  /** Share of the files' bytes uploaded, while any remain. */
+  readonly progress: number | null;
   /** Set once retries stop; the bubble then offers a manual retry. */
   readonly error: string | null;
 }
 
-const newPendingSend = (text: string, files: ReadonlyArray<RajeshFile>): PendingSend => ({
+const newPendingSend = (
+  text: string,
+  prepared: { readonly files: ReadonlyArray<RajeshOutgoingFile>; readonly cleanup: () => void },
+  drafts: ReadonlyArray<DraftComposerAttachment>,
+): PendingSend => ({
   requestId: uuidv4(),
   text,
-  files,
+  files: prepared.files,
+  drafts,
+  cleanup: prepared.cleanup,
   sentAt: Date.now(),
+  progress: null,
   error: null,
 });
 
@@ -506,22 +519,53 @@ async function sendWithRetry(
   chat: RajeshChat,
   token: string,
   send: PendingSend,
+  onProgress: (share: number) => void,
 ): Promise<string | null> {
+  const total = send.files.reduce((sum, file) => sum + file.size, 0);
+  const uploaded = new Set<string>();
+  const uploadedBytes = () =>
+    send.files.reduce((sum, file) => sum + (uploaded.has(file.uploadId) ? file.size : 0), 0);
   for (let attempt = 0; ; attempt += 1) {
     try {
+      // Each file streams on its own, so a message is not bound by one request's size.
+      let inline: Awaited<ReturnType<typeof inlineRajeshFiles>> = null;
+      for (const file of send.files) {
+        if (uploaded.has(file.uploadId)) continue;
+        const before = uploadedBytes();
+        try {
+          await uploadRajeshFile(chat.baseUrl, token, chat.taskKey, file, (sent) =>
+            onProgress(total > 0 ? (before + sent) / total : 1),
+          );
+        } catch (error) {
+          if (rajeshErrorStatus(error) !== 404) throw error;
+          // A gateway without streamed uploads takes the files inline, up to its own limit.
+          inline = await inlineRajeshFiles(send.files);
+          if (inline === null)
+            throw Object.assign(
+              new Error("This Rajesh gateway takes up to 8 MB of files per message."),
+              { status: 413 },
+            );
+          break;
+        }
+        uploaded.add(file.uploadId);
+      }
       await sendRajeshMessage(
         chat.baseUrl,
         token,
         chat.taskKey,
         send.requestId,
         send.text,
-        send.files,
+        inline ??
+          send.files.map((file) => ({ name: file.name, mime: file.mime, upload: file.uploadId })),
       );
       return null;
     } catch (error) {
       const status = rajeshErrorStatus(error);
+      // The gateway no longer holds an upload (for example, it expired): send them again.
+      if (status === 409) uploaded.clear();
       // Refusals other than timeouts and rate limits will not change on a retry.
-      const final = status !== undefined && status < 500 && status !== 408 && status !== 429;
+      const final =
+        status !== undefined && status < 500 && status !== 408 && status !== 409 && status !== 429;
       const delay = SEND_RETRY_DELAYS_MS[attempt];
       console.warn("[rajesh] send failed", status ?? "network", errorText(error));
       if (final || delay === undefined) return errorText(error);
@@ -588,12 +632,23 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const feed = useRajeshFeed(chat, token ?? null);
   const deliver = async (send: PendingSend) => {
     if (!token) return;
-    const mark = (error: string | null) =>
+    const update = (change: Partial<Pick<PendingSend, "error" | "progress">>) =>
       setPending((all) =>
-        all.map((item) => (item.requestId === send.requestId ? { ...item, error } : item)),
+        all.map((item) => (item.requestId === send.requestId ? { ...item, ...change } : item)),
       );
-    mark(null);
-    mark(await sendWithRetry(chat, token, send));
+    update({ error: null, progress: send.files.length > 0 ? 0 : null });
+    let shown = -1;
+    const error = await sendWithRetry(chat, token, send, (share) => {
+      const percent = Math.floor(share * 100);
+      if (percent === shown) return;
+      shown = percent;
+      update({ progress: share });
+    });
+    update({ error, progress: null });
+    if (error === null) {
+      void releaseUnusedComposerAttachmentFiles(send.drafts);
+      send.cleanup();
+    }
   };
   const submit = async () => {
     const message = text.trim();
@@ -601,16 +656,17 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     const drafts = attachments;
     setPreparing(true);
     // Read before clearing the composer, so a file that cannot be read stays to be removed.
-    const files = await attachmentsForRajesh(drafts)
+    const prepared = await filesForRajesh(drafts)
       .catch((error: unknown) => {
         Dialog.alert("Could not attach file", errorText(error));
         return null;
       })
       .finally(() => setPreparing(false));
-    if (files === null) return;
+    if (prepared === null) return;
     const send = newPendingSend(
       replyTo === null ? message : rajeshReplyText(replyTo, message),
-      files,
+      prepared,
+      drafts,
     );
     // At the latest message before the bubble is added, the list follows it rather than holding
     // the older page in place; a smooth scroll would still be running when the bubble lands.
@@ -618,7 +674,6 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     setPending((all) => [...all, send]);
     setText("");
     setAttachments([]);
-    void releaseUnusedComposerAttachmentFiles(drafts);
     setReplyTo(null);
     // And once the bubble is laid out, in case the jump had not landed yet.
     followSend.current = true;
@@ -902,7 +957,9 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                           type="monochrome"
                         />
                         <Text className="text-[13px] leading-[18px] text-foreground-muted">
-                          Sending…
+                          {row.send.progress !== null && row.send.progress < 1
+                            ? `Uploading ${Math.floor(row.send.progress * 100)}%`
+                            : "Sending…"}
                         </Text>
                       </View>
                     )}
@@ -1046,7 +1103,6 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
               // While dictating, the row is the thread composer's recording controls.
               <View className="min-h-12 min-w-0 flex-1 flex-row items-center">
                 <ComposerDictationCancelAction
-                  size="large"
                   presentation={voicePresentation}
                   onCancel={voiceInput.cancel}
                 />
@@ -1057,7 +1113,6 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                   presentation={voicePresentation}
                 />
                 <ComposerDictationPrimaryAction
-                  size="large"
                   state={voiceInput.state}
                   presentation={voicePresentation}
                   isAvailable={voiceInput.isAvailable}
@@ -1093,7 +1148,6 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                 />
                 <View className="h-12 items-center justify-center">
                   <ComposerDictationStartAction
-                    size="large"
                     state={voiceInput.state}
                     isAvailable={voiceInput.isAvailable}
                     disabled={preparing}
@@ -1103,7 +1157,6 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                 </View>
                 <View className="h-12 items-center justify-center">
                   <ComposerActionButton
-                    size="large"
                     accessibilityLabel="Send message"
                     icon="arrow.up"
                     variant="primary"
