@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AppState,
   FlatList,
@@ -39,6 +39,15 @@ import {
 } from "../../../lib/composerImages";
 import { releaseUnusedComposerAttachmentFiles } from "../../../state/use-composer-drafts";
 import { ComposerAttachmentButton } from "../../threads/ComposerAttachmentButton";
+import {
+  ComposerDictationCancelAction,
+  ComposerDictationError,
+  ComposerDictationPrimaryAction,
+  ComposerDictationStartAction,
+  ComposerDictationStatus,
+} from "../../voice-input/ComposerDictationControl";
+import { useVoiceInputController } from "../../voice-input/useVoiceInputController";
+import { resolveVoiceComposerPresentation } from "../../voice-input/voiceInputPresentation";
 import { downloadAttachmentForPreview } from "../../../lib/attachmentDownload";
 import { uuidv4 } from "../../../lib/uuid";
 import { SelectableMarkdownText } from "../../../native/SelectableMarkdownText";
@@ -528,7 +537,25 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const openThread = useOpenThread();
   const styles = useMarkdownStyles();
   const [token, setToken] = useState<string | null | undefined>(undefined);
-  const [text, setText] = useState("");
+  // A store rather than state, so dictation can read and follow the draft as it does a thread's.
+  const [draft] = useState(createDraftStore);
+  const text = useSyncExternalStore(draft.subscribe, draft.get);
+  const setText = draft.set;
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const voiceInput = useVoiceInputController({
+    ownerKey: `rajesh:${chat.taskKey}`,
+    label: "Rajesh",
+    readDraftMessage: draft.get,
+    subscribeToDraftChanges: draft.subscribe,
+    selection,
+    onChangeDraftMessage: draft.set,
+    onChangeSelection: setSelection,
+  });
+  const voicePresentation = resolveVoiceComposerPresentation(
+    voiceInput.state,
+    voiceInput.elapsedSeconds,
+  );
+  const dictating = voicePresentation.statusKind === "active";
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const [preparing, setPreparing] = useState(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -770,7 +797,8 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     if (link?.environmentId) openThread(link.environmentId, link.threadId);
     else if (/^https?:\/\//i.test(href)) void Linking.openURL(href).catch(() => undefined);
   };
-  const canSend = (text.trim() !== "" || attachments.length > 0) && !preparing;
+  const canSend =
+    (text.trim() !== "" || attachments.length > 0) && !preparing && !voiceInput.blocksSubmission;
 
   return (
     <View
@@ -1005,46 +1033,108 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
             />
           </View>
         ) : null}
+        <ComposerDictationError
+          error={voiceInput.state.phase === "error" ? voiceInput.state.error : null}
+          onDismiss={voiceInput.cancel}
+        />
         <OutlinedInput radius="rounded-3xl">
-          {(focus) => (
-            <>
-              <View className="h-12 w-12 items-center justify-center">
-                <ComposerAttachmentButton
-                  supportsFiles
-                  disabled={preparing}
-                  onPickMedia={() => pick("media")}
-                  onPickFiles={() => pick("files")}
-                />
-              </View>
-              <TextInput
-                {...focus}
-                ref={input}
-                accessibilityLabel="Message Rajesh"
-                multiline
-                maxLength={50_000}
-                placeholder="Message Rajesh…"
-                placeholderTextColorClassName="accent-placeholder"
-                value={text}
-                onChangeText={setText}
-                textAlignVertical="center"
-                className="max-h-36 min-h-12 min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2.5 text-base leading-6 text-foreground"
-              />
-              <View className="h-12 items-center justify-center">
-                <ComposerActionButton
+          {(focus) =>
+            dictating ? (
+              // While dictating, the row is the thread composer's recording controls.
+              <View className="min-h-12 min-w-0 flex-1 flex-row items-center">
+                <ComposerDictationCancelAction
                   size="large"
-                  accessibilityLabel="Send message"
-                  icon="arrow.up"
-                  variant="primary"
-                  disabled={!canSend}
-                  onPress={() => void submit()}
+                  presentation={voicePresentation}
+                  onCancel={voiceInput.cancel}
+                />
+                <ComposerDictationStatus
+                  audioLevels={voiceInput.audioLevels}
+                  elapsedSeconds={voiceInput.elapsedSeconds}
+                  phase={voiceInput.state.phase}
+                  presentation={voicePresentation}
+                />
+                <ComposerDictationPrimaryAction
+                  size="large"
+                  state={voiceInput.state}
+                  presentation={voicePresentation}
+                  isAvailable={voiceInput.isAvailable}
+                  onStart={voiceInput.start}
+                  onConfirm={voiceInput.stop}
+                  onCancel={voiceInput.cancel}
                 />
               </View>
-            </>
-          )}
+            ) : (
+              <>
+                <View className="h-12 w-12 items-center justify-center">
+                  <ComposerAttachmentButton
+                    supportsFiles
+                    disabled={preparing}
+                    onPickMedia={() => pick("media")}
+                    onPickFiles={() => pick("files")}
+                  />
+                </View>
+                <TextInput
+                  {...focus}
+                  ref={input}
+                  accessibilityLabel="Message Rajesh"
+                  multiline
+                  maxLength={50_000}
+                  placeholder="Message Rajesh…"
+                  placeholderTextColorClassName="accent-placeholder"
+                  value={text}
+                  onChangeText={setText}
+                  editable={!voiceInput.freezesEditor}
+                  onSelectionChange={(event) => setSelection(event.nativeEvent.selection)}
+                  textAlignVertical="center"
+                  className="max-h-36 min-h-12 min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2.5 text-base leading-6 text-foreground"
+                />
+                <View className="h-12 items-center justify-center">
+                  <ComposerDictationStartAction
+                    size="large"
+                    state={voiceInput.state}
+                    isAvailable={voiceInput.isAvailable}
+                    disabled={preparing}
+                    onStart={voiceInput.start}
+                    onCancel={voiceInput.cancel}
+                  />
+                </View>
+                <View className="h-12 items-center justify-center">
+                  <ComposerActionButton
+                    size="large"
+                    accessibilityLabel="Send message"
+                    icon="arrow.up"
+                    variant="primary"
+                    disabled={!canSend}
+                    onPress={() => void submit()}
+                  />
+                </View>
+              </>
+            )
+          }
         </OutlinedInput>
       </View>
     </View>
   );
+}
+
+/** The composer's text, readable and observable outside rendering. */
+function createDraftStore() {
+  let text = "";
+  const listeners = new Set<() => void>();
+  return {
+    get: () => text,
+    set: (next: string) => {
+      if (next === text) return;
+      text = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 }
 
 /** A file on a message. Tap opens it in the file viewer; a long press saves it to the device. */
