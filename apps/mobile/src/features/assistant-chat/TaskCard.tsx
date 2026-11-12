@@ -8,6 +8,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { useProject, useThreadShell } from "../../state/entities";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { resolveThreadListV2Status } from "../threads/threadListV2";
+import { taskMeta, type TaskOrigin } from "./task-details";
 
 type TaskStatus = ReturnType<typeof resolveThreadListV2Status> | "opening" | "stopped";
 
@@ -99,6 +100,10 @@ export function TaskCard(props: {
   readonly moment?: TaskMoment;
   /** The task's name from the assistant, used until this device has the thread. */
   readonly title?: string | null;
+  /** What the assistant knows of the task's machine and model, used until this device does. */
+  readonly machine?: string | null;
+  readonly model?: string | null;
+  readonly origin?: TaskOrigin | null;
   readonly compact?: boolean;
 }) {
   const threadId = ThreadId.make(props.threadId);
@@ -127,13 +132,19 @@ export function TaskCard(props: {
         : live
     ];
   const title = shell?.title ?? props.title ?? "New task";
-  const context = [project?.title, machine].filter(Boolean).join(" · ");
+  // Where it runs, on what and from where: the detail line every card shares.
+  const meta = taskMeta({
+    machine: machine ?? props.machine ?? null,
+    model: shell?.modelSelection.model ?? props.model ?? null,
+    origin: props.origin ?? null,
+  });
+  const context = [project?.title, ...meta].filter(Boolean).join(" · ");
   if (props.compact) {
     const record = MOMENT_RECORD[moment];
     return (
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${title}. ${record.label}. Open thread.`}
+        accessibilityLabel={`${title}. ${record.label}.${meta.length ? ` ${meta.join(", ")}.` : ""} Open thread.`}
         onPress={() => props.onOpen(environmentId, props.threadId)}
         className="min-h-11 flex-row items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5 active:opacity-80"
       >
@@ -143,15 +154,19 @@ export function TaskCard(props: {
           tintColorClassName="accent-foreground-muted"
           type="monochrome"
         />
-        <Text
-          numberOfLines={1}
-          className="min-w-0 flex-1 text-[13px] leading-[18px] text-foreground-muted"
-        >
-          <Text className="text-[13px] leading-[18px] font-t3-medium text-foreground">
-            {record.label}
+        <View className="min-w-0 flex-1">
+          <Text numberOfLines={1} className="text-[13px] leading-[18px] text-foreground">
+            <Text className="text-[13px] leading-[18px] font-t3-bold text-foreground">
+              {record.label}
+            </Text>
+            {` · ${title}`}
           </Text>
-          {` · ${title}`}
-        </Text>
+          {meta.length ? (
+            <Text numberOfLines={1} className="text-xs leading-4 text-foreground-muted">
+              {meta.join(" · ")}
+            </Text>
+          ) : null}
+        </View>
         <SymbolView
           name="chevron.right"
           size={16}
@@ -189,20 +204,9 @@ export function TaskCard(props: {
         {title}
       </Text>
       {context ? (
-        <View className="mt-1.5 flex-row items-center gap-1.5">
-          <SymbolView
-            name="folder"
-            size={14}
-            tintColorClassName="accent-foreground-muted"
-            type="monochrome"
-          />
-          <Text
-            numberOfLines={1}
-            className="min-w-0 flex-1 text-[13px] leading-[18px] text-foreground-muted"
-          >
-            {context}
-          </Text>
-        </View>
+        <Text numberOfLines={1} className="mt-1 text-[13px] leading-[18px] text-foreground-muted">
+          {context}
+        </Text>
       ) : null}
       <View className="mt-3 flex-row items-center border-t border-border pt-2.5">
         <Text className="flex-1 text-sm font-t3-medium text-primary-text">Open thread</Text>

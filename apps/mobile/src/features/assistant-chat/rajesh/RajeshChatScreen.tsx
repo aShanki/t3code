@@ -86,6 +86,7 @@ import {
   buildRajeshChatEntries,
   buildRajeshChatRows,
   mergeRajeshMessages,
+  rajeshAwaitsTaskDetails,
   rajeshCursor,
   rajeshReplyText,
   rajeshUserContent,
@@ -427,7 +428,11 @@ async function runRajeshFeed(
       });
       failures = 0;
       const statusChanged = update.status !== current.status;
-      if (update.messages.length === 0 && !statusChanged && current.error === null) continue;
+      if (update.messages.length === 0 && !statusChanged && current.error === null) {
+        // A quiet poll: a task started just now may have its name and model by this time.
+        if (rajeshAwaitsTaskDetails(current.threads, Date.now())) await refreshThreads();
+        continue;
+      }
       commit({
         ...latest.current,
         messages: mergeRajeshMessages(latest.current.messages, update.messages),
@@ -910,6 +915,9 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                     onOpen={openThread}
                     moment={row.moment}
                     title={row.title}
+                    machine={row.machine}
+                    model={row.model}
+                    origin={row.origin}
                     compact={!row.latest}
                   />
                 ) : row.kind === "working" ? (

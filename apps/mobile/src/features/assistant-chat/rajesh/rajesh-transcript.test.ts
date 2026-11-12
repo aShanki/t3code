@@ -7,8 +7,10 @@ import {
   rajeshSeparatorLabel,
   rajeshUserContent,
   mergeRajeshMessages,
+  rajeshAwaitsTaskDetails,
   rajeshCursor,
   type RajeshMessage,
+  type RajeshT3Thread,
 } from "./rajesh-transcript";
 
 const message = (id: string, time: number, text: string, bot = false): RajeshMessage => ({
@@ -263,6 +265,53 @@ describe("Rajesh transcript", () => {
       ["task:out:report", "done"],
     ]);
   });
+  it("gives every card of a task what the task list or any update says about it", () => {
+    const said = (id: string, time: number, t3: object): RajeshMessage => ({
+      ...message(id, time, `Update ${id}`, true),
+      t3: { environmentId: "env", threadId: "thread", event: "done", ...t3 } as RajeshMessage["t3"],
+    });
+    const listed = { environmentId: "env", threadId: "thread", state: "launched", created: 20 };
+    const details = (messages: RajeshMessage[], threads: RajeshT3Thread[]) =>
+      buildRajeshChatEntries(messages, threads).flatMap((entry) =>
+        entry.kind === "task"
+          ? [[entry.moment, entry.title, entry.machine, entry.model, entry.origin]]
+          : [],
+      );
+    // The task list names the task as it is now; a dropped start card still lends what it knows.
+    expect(
+      details(
+        [said("out:done", 30, { title: "Old name", machine: "rajesh-gb-1" })],
+        [{ ...listed, title: " Fix the build ", model: "claude-fable-5-2", origin: "app" }],
+      ),
+    ).toEqual([["done", "Fix the build", "rajesh-gb-1", "claude-fable-5-2", "app"]]);
+    // Without the list, the newest update that names a detail supplies it to earlier cards.
+    expect(
+      details(
+        [
+          said("out:asked", 30, { event: "question", model: "gpt-6.1-sol" }),
+          message("app:1", 31, "yes"),
+          said("out:done", 40, { title: "Tidy the docs", machine: "Mac mini", origin: "t3" }),
+        ],
+        [],
+      ),
+    ).toEqual([
+      ["question", "Tidy the docs", "Mac mini", "gpt-6.1-sol", "t3"],
+      ["done", "Tidy the docs", "Mac mini", "gpt-6.1-sol", "t3"],
+    ]);
+    // An older gateway says none of it, and values of the wrong kind are ignored.
+    expect(details([said("out:done", 30, { machine: 7, model: " ", origin: "moon" })], [])).toEqual(
+      [["done", null, null, null, null]],
+    );
+  });
+  it("asks for the task list again only while a new task has no name or model", () => {
+    const started = { environmentId: "env", threadId: "thread", state: "launched", created: 1000 };
+    expect(rajeshAwaitsTaskDetails([started], 60_000)).toBe(true);
+    expect(rajeshAwaitsTaskDetails([{ ...started, title: "Fix the build" }], 60_000)).toBe(true);
+    expect(
+      rajeshAwaitsTaskDetails([{ ...started, title: "Fix the build", model: "m" }], 60_000),
+    ).toBe(false);
+    expect(rajeshAwaitsTaskDetails([started], 1000 + 10 * 60_000)).toBe(false);
+  });
 });
 
 describe("Rajesh chat rows", () => {
@@ -316,6 +365,9 @@ describe("Rajesh chat rows", () => {
           moment: "started",
           messageId: null,
           title: null,
+          machine: null,
+          model: null,
+          origin: null,
           latest: true,
         },
         {

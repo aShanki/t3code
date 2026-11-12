@@ -1,3 +1,5 @@
+import { knownOrigin, knownText, type TaskDetails, type TaskOrigin } from "../task-details";
+
 /** A file the gateway links to a message. `url` is set only for Discord's own CDN copies. */
 export interface RajeshAttachment {
   readonly id: string;
@@ -16,6 +18,9 @@ export interface RajeshTaskUpdate {
   readonly threadId: string;
   readonly event: RajeshTaskEvent;
   readonly title?: string;
+  readonly machine?: string;
+  readonly model?: string;
+  readonly origin?: TaskOrigin;
 }
 
 /** A message as the Rajesh Code gateway returns it. */
@@ -43,6 +48,11 @@ export interface RajeshT3Thread {
   readonly state: string;
   /** A thread the owner started in T3; Rajesh picked it up once it had ended. */
   readonly adopted?: boolean;
+  /** The task's name now, where the bot has read the thread or reported on it. */
+  readonly title?: string;
+  readonly machine?: string;
+  readonly model?: string;
+  readonly origin?: TaskOrigin;
   readonly created: number;
 }
 
@@ -60,7 +70,7 @@ export type RajeshChatEntry =
       readonly replyTo: string | null;
       readonly time: number;
     }
-  | {
+  | (TaskDetails & {
       readonly kind: "task";
       readonly id: string;
       readonly environmentId: string;
@@ -73,7 +83,7 @@ export type RajeshChatEntry =
       readonly title: string | null;
       /** Whether this is the task's newest card. Earlier ones are a one-line record. */
       readonly latest: boolean;
-    };
+    });
 
 export interface RajeshCursor {
   readonly time: number;
@@ -172,6 +182,29 @@ function taskUpdate(message: RajeshMessage): RajeshTaskUpdate | null {
     : null;
 }
 
+const taskDetails = (said: Partial<RajeshTaskUpdate & RajeshT3Thread>) => ({
+  title: knownText(said.title),
+  machine: knownText(said.machine),
+  model: knownText(said.model),
+  origin: knownOrigin(said.origin),
+});
+
+const DETAILS_WAIT_MS = 10 * 60 * 1000;
+/**
+ * Whether a task started in the last ten minutes still has no name or model. The bot reads a
+ * new thread a few seconds after launching it, so the task list is worth asking for again.
+ */
+export function rajeshAwaitsTaskDetails(
+  threads: ReadonlyArray<RajeshT3Thread>,
+  nowMs: number,
+): boolean {
+  return threads.some(
+    (thread) =>
+      nowMs - thread.created < DETAILS_WAIT_MS &&
+      (knownText(thread.title) === null || knownText(thread.model) === null),
+  );
+}
+
 type RajeshTaskEntry = Extract<RajeshChatEntry, { kind: "task" }>;
 const sameTask = (a: RajeshTaskEntry, b: RajeshChatEntry | undefined) =>
   b?.kind === "task" && a.environmentId === b.environmentId && a.threadId === b.threadId;
@@ -231,7 +264,7 @@ export function buildRajeshChatEntries(
         time: message.time,
         moment: update.event,
         messageId: message.id,
-        title: update.title || null,
+        ...taskDetails(update),
         latest: false,
       });
     }
@@ -245,7 +278,7 @@ export function buildRajeshChatEntries(
       time: thread.created,
       moment: thread.adopted ? "ended" : "started",
       messageId: null,
-      title: null,
+      ...taskDetails(thread),
       latest: false,
     });
   }
@@ -264,16 +297,30 @@ export function buildRajeshChatEntries(
       (entry.messageId === null || (silent && entry.moment === next.moment))
     );
   });
-  // Only a task's newest card is `latest`, so its status now is shown once. Every card of a
-  // task carries the newest name any update gave it.
-  const titles = new Map<string, string | null>();
+  // Every card of a task says the same about it: what the task list says now, else what its
+  // newest update said. A card dropped above still counts.
+  const tasks = new Map<string, ReturnType<typeof taskDetails>>();
+  const learn = (entry: RajeshChatEntry) => {
+    if (entry.kind !== "task") return;
+    const task = `${entry.environmentId}:${entry.threadId}`;
+    const details = tasks.get(task);
+    tasks.set(task, {
+      title: details?.title ?? entry.title,
+      machine: details?.machine ?? entry.machine,
+      model: details?.model ?? entry.model,
+      origin: details?.origin ?? entry.origin,
+    });
+  };
+  for (const entry of entries) if (entry.kind === "task" && entry.messageId === null) learn(entry);
+  for (let index = entries.length - 1; index >= 0; index--) learn(entries[index]!);
+  // Only a task's newest card is `latest`, so its status now is shown once.
+  const seen = new Set<string>();
   for (let index = shown.length - 1; index >= 0; index--) {
     const entry = shown[index]!;
     if (entry.kind !== "task") continue;
     const task = `${entry.environmentId}:${entry.threadId}`;
-    const title = titles.get(task) ?? entry.title;
-    shown[index] = { ...entry, title, latest: !titles.has(task) };
-    titles.set(task, title);
+    shown[index] = { ...entry, ...tasks.get(task), latest: !seen.has(task) };
+    seen.add(task);
   }
   return shown;
 }
