@@ -14,20 +14,29 @@ describe("task card details", () => {
     expect(taskModelLabel(" ")).toBeNull();
     expect(taskModelLabel(undefined)).toBeNull();
   });
-  it("lists machine, model and origin in that order and leaves out what is unknown", () => {
-    expect(taskMeta({ machine: "rajesh-gb-1", model: "claude-fable-5-2", origin: "app" })).toEqual([
+  it("lists project, machine, model and origin in that order, leaving out what is unknown", () => {
+    const known = { machine: "rajesh-gb-1", model: "claude-fable-5-2", origin: "app" } as const;
+    expect(taskMeta({ project: "rajesh-monorepo", ...known })).toEqual([
+      "rajesh-monorepo",
       "rajesh-gb-1",
       "Fable 5.2",
       "via app",
     ]);
-    expect(taskMeta({ machine: "Mac mini", model: null, origin: "discord" })).toEqual([
-      "Mac mini",
-      "via Discord",
+    // A task outside any project names none.
+    expect(taskMeta({ project: "No project", ...known })).toEqual([
+      "rajesh-gb-1",
+      "Fable 5.2",
+      "via app",
     ]);
-    expect(taskMeta({ machine: null, model: "gpt-6.1-sol", origin: "t3" })).toEqual([
+    expect(
+      taskMeta({ project: null, machine: "Mac mini", model: null, origin: "discord" }),
+    ).toEqual(["Mac mini", "via Discord"]);
+    expect(taskMeta({ project: null, machine: null, model: "gpt-6.1-sol", origin: "t3" })).toEqual([
       "GPT-6.1 Sol",
       "started in T3",
     ]);
-    expect(taskMeta({ machine: " ", model: null, origin: knownOrigin("moon") })).toEqual([]);
+    expect(
+      taskMeta({ project: " ", machine: " ", model: null, origin: knownOrigin("moon") }),
+    ).toEqual([]);
   });
 });

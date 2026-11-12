@@ -100,7 +100,8 @@ export function TaskCard(props: {
   readonly moment?: TaskMoment;
   /** The task's name from the assistant, used until this device has the thread. */
   readonly title?: string | null;
-  /** What the assistant knows of the task's machine and model, used until this device does. */
+  /** What the assistant knows of the task's project, machine and model, until this device does. */
+  readonly project?: string | null;
   readonly machine?: string | null;
   readonly model?: string | null;
   readonly origin?: TaskOrigin | null;
@@ -132,13 +133,14 @@ export function TaskCard(props: {
         : live
     ];
   const title = shell?.title ?? props.title ?? "New task";
-  // Where it runs, on what and from where: the detail line every card shares.
+  // Which project, where it runs, on what and from where: the detail line every card shares.
   const meta = taskMeta({
+    project: project?.title ?? props.project ?? null,
     machine: machine ?? props.machine ?? null,
     model: shell?.modelSelection.model ?? props.model ?? null,
     origin: props.origin ?? null,
   });
-  const context = [project?.title, ...meta].filter(Boolean).join(" · ");
+  const context = meta.join(" · ");
   if (props.compact) {
     const record = MOMENT_RECORD[moment];
     return (

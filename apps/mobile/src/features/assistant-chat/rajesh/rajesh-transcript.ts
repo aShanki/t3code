@@ -18,6 +18,7 @@ export interface RajeshTaskUpdate {
   readonly threadId: string;
   readonly event: RajeshTaskEvent;
   readonly title?: string;
+  readonly project?: string;
   readonly machine?: string;
   readonly model?: string;
   readonly origin?: TaskOrigin;
@@ -50,6 +51,7 @@ export interface RajeshT3Thread {
   readonly adopted?: boolean;
   /** The task's name now, where the bot has read the thread or reported on it. */
   readonly title?: string;
+  readonly project?: string;
   readonly machine?: string;
   readonly model?: string;
   readonly origin?: TaskOrigin;
@@ -184,6 +186,7 @@ function taskUpdate(message: RajeshMessage): RajeshTaskUpdate | null {
 
 const taskDetails = (said: Partial<RajeshTaskUpdate & RajeshT3Thread>) => ({
   title: knownText(said.title),
+  project: knownText(said.project),
   machine: knownText(said.machine),
   model: knownText(said.model),
   origin: knownOrigin(said.origin),
@@ -306,6 +309,7 @@ export function buildRajeshChatEntries(
     const details = tasks.get(task);
     tasks.set(task, {
       title: details?.title ?? entry.title,
+      project: details?.project ?? entry.project,
       machine: details?.machine ?? entry.machine,
       model: details?.model ?? entry.model,
       origin: details?.origin ?? entry.origin,

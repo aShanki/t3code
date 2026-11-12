@@ -915,6 +915,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                     onOpen={openThread}
                     moment={row.moment}
                     title={row.title}
+                    project={row.project}
                     machine={row.machine}
                     model={row.model}
                     origin={row.origin}

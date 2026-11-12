@@ -7,6 +7,7 @@ const TASK_ORIGINS: ReadonlyArray<string> = ["app", "discord", "t3"];
  * card leaves it out, and has no detail line when it knows none.
  */
 export interface TaskDetails {
+  readonly project: string | null;
   readonly machine: string | null;
   readonly model: string | null;
   readonly origin: TaskOrigin | null;
@@ -51,9 +52,14 @@ const ORIGIN_LABELS: Readonly<Record<TaskOrigin, string>> = {
   t3: "started in T3",
 };
 
-/** A card's detail line, in reading order: machine, model, origin. Unknown parts are left out. */
+// T3's name for the space a task with no project runs in; it says nothing on a card.
+const NO_PROJECT = "No project";
+
+/** A card's detail line: project, machine, model, origin. Unknown parts are left out. */
 export function taskMeta(details: TaskDetails): ReadonlyArray<string> {
+  const project = knownText(details.project);
   return [
+    project === NO_PROJECT ? null : project,
     knownText(details.machine),
     taskModelLabel(details.model),
     details.origin === null ? null : (ORIGIN_LABELS[details.origin] ?? null),

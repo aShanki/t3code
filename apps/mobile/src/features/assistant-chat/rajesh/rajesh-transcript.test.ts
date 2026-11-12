@@ -274,16 +274,26 @@ describe("Rajesh transcript", () => {
     const details = (messages: RajeshMessage[], threads: RajeshT3Thread[]) =>
       buildRajeshChatEntries(messages, threads).flatMap((entry) =>
         entry.kind === "task"
-          ? [[entry.moment, entry.title, entry.machine, entry.model, entry.origin]]
+          ? [[entry.moment, entry.title, entry.project, entry.machine, entry.model, entry.origin]]
           : [],
       );
     // The task list names the task as it is now; a dropped start card still lends what it knows.
     expect(
       details(
         [said("out:done", 30, { title: "Old name", machine: "rajesh-gb-1" })],
-        [{ ...listed, title: " Fix the build ", model: "claude-fable-5-2", origin: "app" }],
+        [
+          {
+            ...listed,
+            title: " Fix the build ",
+            project: "rajesh-monorepo",
+            model: "claude-fable-5-2",
+            origin: "app",
+          },
+        ],
       ),
-    ).toEqual([["done", "Fix the build", "rajesh-gb-1", "claude-fable-5-2", "app"]]);
+    ).toEqual([
+      ["done", "Fix the build", "rajesh-monorepo", "rajesh-gb-1", "claude-fable-5-2", "app"],
+    ]);
     // Without the list, the newest update that names a detail supplies it to earlier cards.
     expect(
       details(
@@ -295,12 +305,12 @@ describe("Rajesh transcript", () => {
         [],
       ),
     ).toEqual([
-      ["question", "Tidy the docs", "Mac mini", "gpt-6.1-sol", "t3"],
-      ["done", "Tidy the docs", "Mac mini", "gpt-6.1-sol", "t3"],
+      ["question", "Tidy the docs", null, "Mac mini", "gpt-6.1-sol", "t3"],
+      ["done", "Tidy the docs", null, "Mac mini", "gpt-6.1-sol", "t3"],
     ]);
     // An older gateway says none of it, and values of the wrong kind are ignored.
     expect(details([said("out:done", 30, { machine: 7, model: " ", origin: "moon" })], [])).toEqual(
-      [["done", null, null, null, null]],
+      [["done", null, null, null, null, null]],
     );
   });
   it("asks for the task list again only while a new task has no name or model", () => {
@@ -365,6 +375,7 @@ describe("Rajesh chat rows", () => {
           moment: "started",
           messageId: null,
           title: null,
+          project: null,
           machine: null,
           model: null,
           origin: null,
