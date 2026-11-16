@@ -64,22 +64,23 @@ describe("local agent alerts", () => {
     // Completions wait COMPLETION_CONFIRM_MS natively, as the relay holds them.
     expect(decision.completions.map((row) => row.status)).toEqual(["Agent finished"]);
     expect(COMPLETION_CONFIRM_MS).toBe(5_000);
-    const confirmed = { rows: [...decision.rows, ...decision.completions] };
-
-    const payload = localAlertPayload({
-      rows: confirmed.rows,
-      deviceId: "device",
-      userId: "local",
-      nowMs: now,
-    });
-    expect(payload).toMatchObject({
-      t3_kind: "agent_activity",
-      device_id: "device",
-      user_id: "local",
-      alert_title: "2 agents need attention",
-      alert_body: "Task a, Task b",
-      alert_path: "/threads/env/a",
-    });
+    // Each thread has its own card, which leads with the state.
+    const payloads = [...decision.rows, ...decision.completions].map((row) =>
+      localAlertPayload({ row, deviceId: "device", userId: "local", nowMs: now }),
+    );
+    expect(payloads).toMatchObject([
+      {
+        t3_kind: "agent_activity",
+        device_id: "device",
+        user_id: "local",
+        alert_title: "Needs approval · Task a",
+        alert_path: "/threads/env/a",
+        alert_slot: "task:env/a",
+        alert_state: "approval",
+        alert_generic: "1",
+      },
+      { alert_title: "Done · Task b", alert_slot: "task:env/b", alert_state: "done" },
+    ]);
   });
 
   it("stays quiet on a replay, an unobserved finish, a stale finish, and disabled kinds", () => {

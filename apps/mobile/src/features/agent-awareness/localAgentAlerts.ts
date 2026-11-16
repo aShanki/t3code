@@ -8,11 +8,13 @@ import * as DateTime from "effect/DateTime";
 
 /**
  * Local alerts for builds that cannot receive relay pushes. They apply the relay's own rules
- * (infra/relay/src/agentActivity/agentActivityAlerts.ts) to the shells this client already
- * streams, and render through the same native notification path, so they read the same.
+ * (infra/relay/src/agentActivity/agentActivityAlerts.ts) for when to alert to the shells this
+ * client already streams. Each thread has one card (`slot`) that its alerts replace.
  */
 export interface LocalAgentRow {
   readonly key: string;
+  /** The card of this thread, the same one the fork's server names in its pushes. */
+  readonly slot: string;
   readonly phase: AgentAwarenessPhase;
   readonly status: string;
   readonly threadTitle: string;
@@ -68,6 +70,7 @@ export function localAgentRows(input: {
     if (state === null || state.phase === "stale") continue;
     rows.push({
       key: JSON.stringify([input.environmentId, thread.id]),
+      slot: `task:${input.environmentId}/${thread.id}`,
       phase: state.phase,
       status: state.headline,
       threadTitle: state.threadTitle,
@@ -132,36 +135,46 @@ export function localAlertRows(input: {
   return { rows, completions };
 }
 
-/** The relay's alert text for one or several rows. */
-export function localAlertText(rows: ReadonlyArray<LocalAgentRow>) {
-  const first = rows[0];
-  if (!first) return null;
-  if (rows.length === 1)
-    return { title: first.threadTitle, body: `${first.status}: ${first.projectTitle}` };
-  return {
-    title: `${rows.length} agents ${isAttention(first.phase) ? "need attention" : "finished"}`,
-    body: rows.map((row) => row.threadTitle).join(", "),
-  };
-}
+/** What a thread's card says: its state first, since a notification shade cuts a title's end. */
+const CARD_TEXT: Partial<
+  Record<
+    AgentAwarenessPhase,
+    { readonly state: string; readonly label: string; readonly body: string }
+  >
+> = {
+  waiting_for_approval: {
+    state: "approval",
+    label: "Needs approval",
+    body: "Waiting for you to approve a step.",
+  },
+  waiting_for_input: { state: "answer", label: "Needs answer", body: "Waiting for your answer." },
+  completed: { state: "done", label: "Done", body: "The run finished." },
+  failed: { state: "failed", label: "Failed", body: "The run failed." },
+};
 
 /** A relay-shaped FCM data payload for the native renderer, which dedupes by `alert_id`. */
 export function localAlertPayload(input: {
-  readonly rows: ReadonlyArray<LocalAgentRow>;
+  readonly row: LocalAgentRow;
   readonly deviceId: string;
   readonly userId: string;
   readonly nowMs: number;
 }): Record<string, string> | null {
-  const text = localAlertText(input.rows);
-  const first = input.rows[0];
-  if (text === null || first === undefined) return null;
+  const { row } = input;
+  const text = CARD_TEXT[row.phase];
+  if (text === undefined) return null;
   return {
     t3_kind: "agent_activity",
     device_id: input.deviceId,
     user_id: input.userId,
     updated_at: String(input.nowMs),
-    alert_id: input.rows.map((row) => `${row.key}|${row.phase}|${row.updatedAt}`).join("\n"),
-    alert_title: text.title,
+    alert_id: `${row.key}|${row.phase}|${row.updatedAt}`,
+    alert_title: `${text.label} · ${row.threadTitle}`,
     alert_body: text.body,
-    alert_path: first.deepLink,
+    alert_path: row.deepLink,
+    alert_slot: row.slot,
+    alert_state: text.state,
+    alert_task: row.threadTitle,
+    // This device knows the state but not what the agent said; a server's account outranks it.
+    alert_generic: "1",
   };
 }

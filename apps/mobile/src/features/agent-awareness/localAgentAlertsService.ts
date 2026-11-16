@@ -11,6 +11,7 @@ import { isPersonalFork } from "../../lib/personalFork";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { threadEnvironment } from "../../state/threads";
+import { rajeshPushStatusAtom } from "../assistant-chat/rajesh/rajesh-push";
 import {
   cancelLocalAndroidAgentAlert,
   receiveLocalAndroidAgentAlert,
@@ -28,6 +29,12 @@ import {
 
 const LOCAL_DEVICE_ID = "local-alerts";
 const LOCAL_USER_ID = "local";
+/**
+ * Rajesh pushes its own account of a task's question, finish or failure, usually within 15
+ * seconds and with what the agent said. This device's alert waits this long for it, and shows
+ * only when none came. An approval never waits: the agent is blocked until the user acts.
+ */
+const RAJESH_ACCOUNT_WAIT_MS = 45_000;
 
 interface LocalAlertInputs {
   readonly enabled: boolean;
@@ -75,7 +82,8 @@ export function installLocalAgentAlerts(): () => void {
 
   // Per environment: absent until its first snapshot, which is a replay and never alerts.
   const previous = new Map<EnvironmentId, ReadonlyMap<string, AgentAwarenessPhase>>();
-  const heldCompletions = new Set<string>();
+  // Alerts waiting natively, by card, with the phase each reports.
+  const held = new Map<string, AgentAwarenessPhase>();
   let enabled = true;
   let environmentCount = 0;
   let permissionRequested = false;
@@ -84,7 +92,23 @@ export function installLocalAgentAlerts(): () => void {
     observations: ReadonlyArray<{ environmentId: EnvironmentId; rows: readonly LocalAgentRow[] }>,
   ) => {
     const nowMs = Date.now();
-    const alerts: LocalAgentRow[] = [];
+    const rajeshWaitMs =
+      appAtomRegistry.get(rajeshPushStatusAtom) === "on" ? RAJESH_ACCOUNT_WAIT_MS : 0;
+    const alert = (row: LocalAgentRow, delayMs: number) => {
+      const payload = localAlertPayload({
+        row,
+        deviceId: LOCAL_DEVICE_ID,
+        userId: LOCAL_USER_ID,
+        nowMs: nowMs + delayMs,
+      });
+      if (payload === null) return;
+      if (delayMs === 0) {
+        receiveLocalAndroidAgentAlert(payload);
+        return;
+      }
+      held.set(row.slot, row.phase);
+      receiveLocalAndroidAgentAlertLater(payload, delayMs, row.slot);
+    };
     for (const { environmentId, rows } of observations) {
       const decision = localAlertRows({
         previous: previous.get(environmentId) ?? null,
@@ -94,34 +118,23 @@ export function installLocalAgentAlerts(): () => void {
       });
       previous.set(environmentId, new Map(rows.map((row) => [row.key, row.phase])));
       if (!enabled) continue;
-      alerts.push(...decision.rows);
+      for (const row of decision.rows) {
+        alert(row, row.phase === "waiting_for_approval" ? 0 : rajeshWaitMs);
+      }
       for (const row of decision.completions) {
-        const payload = localAlertPayload({
-          rows: [row],
-          deviceId: LOCAL_DEVICE_ID,
-          userId: LOCAL_USER_ID,
-          nowMs: nowMs + COMPLETION_CONFIRM_MS,
-        });
-        if (payload === null) continue;
-        heldCompletions.add(row.key);
-        receiveLocalAndroidAgentAlertLater(payload, COMPLETION_CONFIRM_MS, row.key);
+        alert(row, Math.max(COMPLETION_CONFIRM_MS, rajeshWaitMs));
       }
     }
-    // A run can end moments before its continuation; drop a held finish once it moves on.
-    for (const key of heldCompletions) {
-      const phase = observations.flatMap(({ rows }) => rows).find((row) => row.key === key)?.phase;
-      if (phase !== "completed") {
-        heldCompletions.delete(key);
-        cancelLocalAndroidAgentAlert(key);
+    // A run can end moments before its continuation; drop a held alert once its thread moves on.
+    const phases = new Map(
+      observations.flatMap(({ rows }) => rows.map((row) => [row.slot, row.phase] as const)),
+    );
+    for (const [slot, phase] of held) {
+      if (phases.get(slot) !== phase) {
+        held.delete(slot);
+        cancelLocalAndroidAgentAlert(slot);
       }
     }
-    const payload = localAlertPayload({
-      rows: alerts,
-      deviceId: LOCAL_DEVICE_ID,
-      userId: LOCAL_USER_ID,
-      nowMs,
-    });
-    if (payload !== null) receiveLocalAndroidAgentAlert(payload);
   };
 
   const syncBackgroundConnection = () => {
@@ -180,7 +193,7 @@ export function installLocalAgentAlerts(): () => void {
   return () => {
     stopInputs();
     appState.remove();
-    for (const key of heldCompletions) cancelLocalAndroidAgentAlert(key);
+    for (const slot of held.keys()) cancelLocalAndroidAgentAlert(slot);
     setAndroidBackgroundConnection(false, "");
   };
 }

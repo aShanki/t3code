@@ -58,6 +58,7 @@ class T3AgentNotificationsModule : Module() {
 
     Function("setThreadOnScreen") { path: String? ->
       AgentNotifications.setThreadOnScreen(path)
+      if (path != null) appContext.reactContext?.let { AgentNotifications.cardsSeen(it, path) }
     }
 
     Function("setChatPush") { scheme: String? ->
@@ -66,6 +67,7 @@ class T3AgentNotificationsModule : Module() {
 
     Function("setChatOnScreen") { visible: Boolean ->
       AgentNotifications.setChatOnScreen(visible)
+      if (visible) appContext.reactContext?.let { AgentNotifications.cardsSeen(it, "/chat") }
     }
 
     Function("openLiveUpdateSettings") {

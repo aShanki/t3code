@@ -53,7 +53,7 @@ export function LocalNotificationsSettings() {
             <SettingsSwitchRow
               icon="questionmark.bubble"
               label="Push notifications"
-              subtitle="Rajesh's messages and task updates: finished, failed, questions and approvals. Delivered even when the app is closed."
+              subtitle="Rajesh's messages in one card, and one card per task that says where it stands. Progress and acknowledgements arrive silently. Delivered even when the app is closed."
               value={loaded ? pushEnabled : null}
               onValueChange={(value) => {
                 save({ rajeshPushEnabled: value });
@@ -67,7 +67,7 @@ export function LocalNotificationsSettings() {
           <SettingsSwitchRow
             icon="bell.badge"
             label="Agent alerts"
-            subtitle="Approvals, questions, and finished or failed threads, raised by this device the moment they happen. While on, a silent notification keeps this app connected in the background."
+            subtitle="Approvals, questions, and finished or failed threads, raised by this device. With push on, Rajesh's update of a task takes the place of this device's alert for it. While on, a silent notification keeps this app connected in the background."
             value={loaded ? alertsEnabled : null}
             onValueChange={(value) => {
               save({ localAgentAlertsEnabled: value });

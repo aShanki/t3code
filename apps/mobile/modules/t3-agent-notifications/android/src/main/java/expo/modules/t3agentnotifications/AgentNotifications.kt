@@ -136,6 +136,7 @@ object AgentNotifications {
     context.getSharedPreferences(LOCAL_STORE, Context.MODE_PRIVATE).edit().apply {
       if (scheme == null) remove("chatScheme") else putString("chatScheme", scheme)
     }.apply()
+    if (scheme == null) AgentCards.clear(context)
   }
 
   @Synchronized
@@ -151,6 +152,8 @@ object AgentNotifications {
         NotificationChannel(CHAT_CHANNEL, "Chat messages", NotificationManager.IMPORTANCE_HIGH)
       )
     }
+    // The server's account of a task replaces this device's own alert for it, held or shown.
+    data["alert_slot"]?.let { cancelLater(it) }
     showAlert(context, prefs, scheme, data + mapOf("alert_group" to CHAT_CHANNEL), CHAT_CHANNEL)
   }
 
@@ -164,6 +167,9 @@ object AgentNotifications {
   fun setChatOnScreen(visible: Boolean) {
     chatOnScreen = visible
   }
+
+  /** Opening a thread or the chat clears the cards that led there. */
+  fun cardsSeen(context: Context, path: String) = AgentCards.seen(context, path)
 
   @Synchronized
   fun dismiss(context: Context) {
@@ -246,6 +252,10 @@ object AgentNotifications {
     alertId: String,
     channel: String = ALERT_CHANNEL
   ) {
+    if (AgentCards.handles(data)) {
+      AgentCards.post(context, scheme, data, channel)
+      return
+    }
     val title = data["alert_title"].orEmpty().take(120)
     // Grouped alerts list up to five 120-character thread titles.
     val body = data["alert_body"].orEmpty().take(608)
@@ -447,7 +457,7 @@ object AgentNotifications {
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
       .setShowWhen(false)
 
-  private fun contentIntent(
+  internal fun contentIntent(
     context: Context,
     scheme: String,
     path: String?,

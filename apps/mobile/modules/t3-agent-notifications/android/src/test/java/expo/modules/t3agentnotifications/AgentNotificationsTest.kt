@@ -111,6 +111,108 @@ class AgentNotificationsTest : AgentNotificationsFixture() {
     assertEquals(2, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
   }
 
+  private fun card(id: String, slot: String, vararg fields: Pair<String, String>) =
+    chat(id) + mapOf("alert_slot" to slot) + fields
+
+  private fun cards() = manager.activeNotifications.filter { it.tag == "t3-agent-card" }
+  private fun text(card: android.service.notification.StatusBarNotification) =
+    card.notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+  private fun alerts(card: android.service.notification.StatusBarNotification) =
+    card.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE == 0 &&
+      if (Build.VERSION.SDK_INT >= 26) {
+        card.notification.channelId != "quiet-updates"
+      } else {
+        card.notification.defaults != 0
+      }
+
+  @Test
+  fun theConversationIsOneCardThatAlertsForAnswersButNotAcknowledgements() {
+    AgentNotifications.setChatPush(context, "t3code-chat")
+    AgentNotifications.receiveChat(
+      context,
+      card("ack", "chat", "alert_body" to "On it.", "alert_quiet" to "1")
+    )
+    assertFalse(alerts(cards().single()))
+    AgentNotifications.receiveChat(context, card("answer", "chat", "alert_body" to "It is 4."))
+    val conversation = cards().single()
+    assertTrue(alerts(conversation))
+    assertEquals(
+      listOf("On it.", "It is 4."),
+      NotificationCompat.MessagingStyle
+        .extractMessagingStyleFromNotification(conversation.notification)!!
+        .messages.map { it.text.toString() }
+    )
+    // Opening the chat clears its card, and the next message starts a new one.
+    AgentNotifications.cardsSeen(context, "/chat")
+    assertTrue(manager.activeNotifications.isEmpty())
+    AgentNotifications.receiveChat(context, card("later", "chat", "alert_body" to "Shipped."))
+    assertEquals(
+      1,
+      NotificationCompat.MessagingStyle
+        .extractMessagingStyleFromNotification(cards().single().notification)!!.messages.size
+    )
+  }
+
+  @Test
+  fun aTaskIsOneCardWhereAServersAccountOutranksThisDevicesOwn() {
+    AgentNotifications.setChatPush(context, "t3code-chat")
+    val local = mapOf(
+      "alert_title" to "Needs answer · Fix the login",
+      "alert_body" to "Waiting for your answer.",
+      "alert_path" to "/threads/env/one",
+      "alert_slot" to "task:env/one",
+      "alert_state" to "answer",
+      "alert_generic" to "1",
+    )
+    val pushed = arrayOf(
+      "alert_title" to "Needs answer · Fix the login",
+      "alert_body" to "It asks which region to deploy to.",
+      "alert_state" to "answer",
+      "alert_thread" to "/threads/env/one",
+    )
+    AgentNotifications.receiveLocal(context, "t3code-chat", local + ("alert_id" to "local-1"))
+    assertTrue(alerts(cards().single()))
+    // The server reports the same event with what the agent asked: new text, no second alert.
+    AgentNotifications.receiveChat(context, card("pushed-1", "task:env/one", *pushed))
+    assertEquals("It asks which region to deploy to.", text(cards().single()))
+    assertFalse(alerts(cards().single()))
+    assertEquals("Open task", cards().single().notification.actions.single().title)
+    AgentNotifications.receiveLocal(context, "t3code-chat", local + ("alert_id" to "local-2"))
+    assertEquals("It asks which region to deploy to.", text(cards().single()))
+
+    // A held alert of this device is dropped once the server has reported on its task.
+    AgentNotifications.receiveLater(
+      context,
+      "t3code-chat",
+      local + ("alert_id" to "local-3") + ("alert_slot" to "task:env/two"),
+      60_000,
+      "task:env/two"
+    )
+    AgentNotifications.receiveChat(
+      context,
+      card(
+        "pushed-2",
+        "task:env/two",
+        "alert_title" to "Working · Import the catalog",
+        "alert_body" to "Retrying on a mirror.",
+        "alert_state" to "working",
+        "alert_quiet" to "1",
+      )
+    )
+    shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMinutes(2))
+    assertEquals(2, cards().size)
+    assertFalse(alerts(cards().first { it.id == "task:env/two".hashCode() }))
+
+    // A new state alerts again, and opening the task's thread clears its card.
+    AgentNotifications.receiveChat(
+      context,
+      card("pushed-3", "task:env/two", "alert_title" to "Done · Import the catalog", "alert_state" to "done")
+    )
+    assertTrue(alerts(cards().first { it.id == "task:env/two".hashCode() }))
+    AgentNotifications.cardsSeen(context, "/threads/env/one")
+    assertEquals(listOf("task:env/two".hashCode()), cards().map { it.id })
+  }
+
   @Test
   fun alertHistoryEvictsOnlyTheOldestEntryAfterCapacity() {
     lifecycle.currentState = Lifecycle.State.RESUMED
