@@ -16,6 +16,8 @@ import { PrimaryConnectionTarget } from "../connection/model.ts";
 import { v2Now, v2ShellSnapshot, v2ThreadShell } from "./orchestrationV2TestFixtures.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import { isThreadWorking } from "./threadInbox.ts";
+import { withRoutineFlarialOncallThreads } from "./flarialOncall.ts";
+import { unloadedOlderSettledCount } from "./olderSettledThreads.ts";
 import { childThreadInputsTitle, createEnvironmentThreadShellAtoms } from "./threadShell.ts";
 
 const environmentId = EnvironmentId.make("environment-v2");
@@ -57,6 +59,170 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
 }
 
 describe("v2 thread shell lists", () => {
+  it("keeps only Flarial on-call intervention in owner lists while retaining its records", () => {
+    const flarialEnvironment = EnvironmentId.make("1c41a451-71b9-42b2-a8a5-3bcc7d95ac4a");
+    const flarialProject = ProjectId.make("c351dd77-7e1c-4ca7-aa65-3abb1fe95499");
+    const { registry, threads, snapshotAtom } = makeHarness([
+      flarialEnvironment,
+      remoteEnvironmentId,
+    ]);
+    const routine = {
+      ...v2ThreadShell,
+      projectId: flarialProject,
+      status: "running" as const,
+      latestRunId: RunId.make("oncall-run"),
+      activeRunId: RunId.make("oncall-run"),
+    };
+    const rajesh = { ...routine, id: ThreadId.make("rajesh-oncall"), projectId: otherProjectId };
+    registry.set(snapshotAtom(remoteEnvironmentId), { ...v2ShellSnapshot, threads: [routine] });
+    const disposeQuiet = registry.mount(threads.quietThreadShellsAtom);
+    const disposeNavigation = registry.mount(threads.navigationThreadShellsAtom);
+    const cases: ReadonlyArray<{
+      readonly change: Partial<OrchestrationV2ThreadShell>;
+      readonly visible: boolean;
+    }> = [
+      { change: {}, visible: false },
+      {
+        change: {
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("question"),
+            kind: "user_input",
+            createdAt: v2Now,
+          },
+        },
+        visible: true,
+      },
+      {
+        change: {
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("approval"),
+            kind: "command",
+            createdAt: v2Now,
+          },
+        },
+        visible: true,
+      },
+      {
+        change: {
+          pendingRuntimeRequest: {
+            id: RuntimeRequestId.make("auth"),
+            kind: "auth_refresh",
+            createdAt: v2Now,
+          },
+        },
+        visible: true,
+      },
+      { change: {}, visible: false },
+      {
+        change: {
+          status: "completed",
+          activeRunId: null,
+          settledOverride: "settled",
+          settledAt: v2Now,
+        },
+        visible: false,
+      },
+      { change: { status: "completed", activeRunId: null, pinnedAt: v2Now }, visible: true },
+      { change: { status: "completed", activeRunId: null }, visible: false },
+      { change: { status: "waiting" }, visible: true },
+      { change: { status: "failed" }, visible: true },
+      { change: { status: "interrupted" }, visible: true },
+      { change: { status: "cancelled" }, visible: true },
+      { change: { status: "rolled_back" }, visible: true },
+      { change: { status: "idle", latestRunId: null, activeRunId: null }, visible: true },
+      { change: { hasActionableProposedPlan: true, interactionMode: "plan" }, visible: true },
+      { change: { pendingGuestMessageCount: 1 }, visible: true },
+      { change: { blockedOnThreadWait: true }, visible: true },
+      { change: { lastError: "Provider disconnected" }, visible: true },
+      { change: { status: "failed", activityRunStatus: "running" }, visible: true },
+      { change: { activityRunStatus: "waiting" }, visible: true },
+    ];
+    for (const { change, visible } of cases) {
+      registry.set(snapshotAtom(flarialEnvironment), {
+        ...v2ShellSnapshot,
+        threads: [{ ...routine, ...change }, rajesh],
+      });
+      for (const list of [threads.quietThreadShellsAtom, threads.navigationThreadShellsAtom]) {
+        const entries = registry.get(list);
+        expect(
+          entries.some(
+            (entry) => entry.environmentId === flarialEnvironment && entry.id === routine.id,
+          ),
+        ).toBe(visible);
+        expect(entries.some((entry) => entry.id === rajesh.id)).toBe(true);
+        expect(
+          entries.some(
+            (entry) => entry.environmentId === remoteEnvironmentId && entry.id === routine.id,
+          ),
+        ).toBe(true);
+      }
+      expect(registry.get(threads.threadShellsAtom)).toHaveLength(3);
+      expect(
+        registry.get(
+          threads.threadShellAtom({ environmentId: flarialEnvironment, threadId: routine.id }),
+        )?.source,
+      ).toEqual({ ...routine, ...change });
+    }
+    const child = {
+      ...routine,
+      id: ThreadId.make("oncall-child"),
+      activityRunStatus: "running" as const,
+      lineage: {
+        rootThreadId: routine.id,
+        parentThreadId: routine.id,
+        relationshipToParent: "subagent" as const,
+      },
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("child-approval"),
+        kind: "command" as const,
+        createdAt: v2Now,
+      },
+    };
+    registry.set(snapshotAtom(flarialEnvironment), {
+      ...v2ShellSnapshot,
+      threads: [routine, child],
+    });
+    expect(
+      registry
+        .get(threads.navigationThreadShellsAtom)
+        .some((entry) => entry.environmentId === flarialEnvironment && entry.id === routine.id),
+    ).toBe(true);
+    registry.set(snapshotAtom(flarialEnvironment), {
+      ...v2ShellSnapshot,
+      threads: [routine, { ...child, pendingRuntimeRequest: null }],
+    });
+    expect(
+      registry
+        .get(threads.navigationThreadShellsAtom)
+        .some((entry) => entry.environmentId === flarialEnvironment && entry.id === routine.id),
+    ).toBe(false);
+    const settled = {
+      ...routine,
+      status: "completed" as const,
+      activeRunId: null,
+      settledOverride: "settled" as const,
+      settledAt: v2Now,
+    };
+    registry.set(snapshotAtom(flarialEnvironment), { ...v2ShellSnapshot, threads: [settled] });
+    const listed = registry.get(threads.quietThreadShellsAtom);
+    const loaded = registry.get(threads.threadShellsAtom);
+    expect(
+      unloadedOlderSettledCount({
+        olderSettled: () => ({
+          before: "2026-06-21T00:00:00.000Z",
+          beforeMs: DateTime.toEpochMillis(v2Now) + 86_400_000,
+          counts: new Map([[flarialProject, 1]]),
+        }),
+        scopes: [{ environmentId: flarialEnvironment, projectIds: [flarialProject] }],
+        threads: withRoutineFlarialOncallThreads(listed, loaded),
+      }),
+    ).toBe(0);
+    expect(withRoutineFlarialOncallThreads(loaded, loaded)).toEqual(loaded);
+    disposeNavigation();
+    disposeQuiet();
+    registry.dispose();
+  });
+
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

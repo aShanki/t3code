@@ -5,6 +5,7 @@ import {
   settledShelfFrontier,
   sortOlderSettledScopes,
   unloadedOlderSettledCount,
+  withRoutineFlarialOncallThreads,
   wantedOlderSettledPages,
   type OlderSettledScope,
 } from "@t3tools/client-runtime/state/threads";
@@ -12,7 +13,7 @@ import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { olderSettledThreads, threadFamilies } from "./threads";
+import { environmentThreadShells, olderSettledThreads, threadFamilies } from "./threads";
 
 const NO_PAGES: ReadonlyMap<EnvironmentId, number> = new Map();
 
@@ -69,7 +70,14 @@ export function useOlderSettledShelf(input: {
     isListed: (thread: EnvironmentThreadShell) => isListedSettledThread(thread.source, frontier),
     /** Older settled threads in scope that are not local; add it to the local Settled rows. */
     unloadedCount: (threads: ReadonlyArray<EnvironmentThreadShell>) =>
-      unloadedOlderSettledCount({ olderSettled: olderOf, scopes, threads }),
+      unloadedOlderSettledCount({
+        olderSettled: olderOf,
+        scopes,
+        threads: withRoutineFlarialOncallThreads(
+          threads,
+          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+        ),
+      }),
     loading: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "pending"),
     failed: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "failed"),
     retry: () => {

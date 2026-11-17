@@ -5,6 +5,7 @@ import {
   settledShelfFrontier,
   sortOlderSettledScopes,
   unloadedOlderSettledCount,
+  withRoutineFlarialOncallThreads,
   wantedOlderSettledPages,
   type OlderSettled,
   type OlderSettledScope,
@@ -14,7 +15,7 @@ import { Atom } from "effect/reactivity";
 import { useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
-import { olderSettledThreads, threadFamilies } from "./threads";
+import { environmentThreadShells, olderSettledThreads, threadFamilies } from "./threads";
 
 const NO_PAGES: ReadonlyMap<EnvironmentId, number> = new Map();
 const NO_OLDER_SETTLED: Atom.Atom<OlderSettled | null> = Atom.make(null);
@@ -72,7 +73,14 @@ export function useOlderSettledShelf(input: {
     isListed: (thread: EnvironmentThreadShell) => isListedSettledThread(thread.source, frontier),
     /** Older settled threads in scope that are not local; add it to the local Settled rows. */
     unloadedCount: (threads: ReadonlyArray<EnvironmentThreadShell>) =>
-      unloadedOlderSettledCount({ olderSettled: olderOf, scopes, threads }),
+      unloadedOlderSettledCount({
+        olderSettled: olderOf,
+        scopes,
+        threads: withRoutineFlarialOncallThreads(
+          threads,
+          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+        ),
+      }),
     loading: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "pending"),
     failed: loaded.some(({ scope }) => pagesOf(scope.environmentId)?.status === "failed"),
     retry: () => {

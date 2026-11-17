@@ -17,6 +17,7 @@ import { Atom } from "effect/reactivity";
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
 import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { hiddenThreadKeys, NO_HIDDEN_THREADS } from "./threadTagFilter.ts";
+import { isRoutineFlarialOncall } from "./flarialOncall.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -656,7 +657,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     for (const ref of get(threadRefsAtom)) {
       if (hidden.has(threadKey(ref))) continue;
       const shell = get(quietThreadShellAtomFamily(threadKey(ref)));
-      if (shell !== null) next.push(shell);
+      if (shell !== null && !isRoutineFlarialOncall(shell)) next.push(shell);
     }
     if (arrayElementsEqual(previousQuietThreadShells, next)) return previousQuietThreadShells;
     previousQuietThreadShells = next;
@@ -706,7 +707,8 @@ export function createEnvironmentThreadShellAtoms(input: {
         ) {
           continue;
         }
-        next.push(scopedThread(environmentId, thread, subagentRequests));
+        const shell = scopedThread(environmentId, thread, subagentRequests);
+        if (!isRoutineFlarialOncall(shell)) next.push(shell);
       }
     }
     if (arrayElementsEqual(previousNavigationShells, next)) return previousNavigationShells;
