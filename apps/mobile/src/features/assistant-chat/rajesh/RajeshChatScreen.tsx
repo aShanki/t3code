@@ -82,6 +82,7 @@ import {
   writeRajeshChatCache,
 } from "./rajesh-chat-cache";
 import { resetRajeshDeviceKey } from "./rajesh-device-key";
+import { exportRajeshAuthDiagnostics } from "./rajesh-auth-diagnostics";
 import {
   buildRajeshChatEntries,
   buildRajeshChatRows,
@@ -813,6 +814,19 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
               }}
             />
           </View>
+          <Button
+            tone="text"
+            fullWidth
+            label="Copy connection diagnostics"
+            onPress={() =>
+              void Clipboard.setStringAsync(exportRajeshAuthDiagnostics()).then(() =>
+                Dialog.alert(
+                  "Copied",
+                  "Connection diagnostics copied. They contain event names and times only.",
+                ),
+              )
+            }
+          />
         </View>
       </View>
     );

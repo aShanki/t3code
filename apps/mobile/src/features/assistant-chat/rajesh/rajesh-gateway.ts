@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 
 import { clearRajeshChatCache } from "./rajesh-chat-cache";
 import { rajeshDeviceKeyThumbprint, rajeshDeviceProof } from "./rajesh-device-key";
+import { recordRajeshAuthEvent } from "./rajesh-auth-diagnostics";
 import type { RajeshCursor, RajeshMessage, RajeshT3Thread } from "./rajesh-transcript";
 
 /** The gateway a build pairs with by default. Builds that name none ask for the address. */
@@ -12,15 +13,27 @@ const tokenKey = (baseUrl: string) =>
   `t3code.rajesh.session.${baseUrl.replace(/[^A-Za-z0-9.-]/g, "_")}`;
 
 export function readRajeshToken(baseUrl: string): Promise<string | null> {
-  return SecureStore.getItemAsync(tokenKey(baseUrl), deviceOnly).catch(() => null);
+  return SecureStore.getItemAsync(tokenKey(baseUrl), deviceOnly)
+    .then((value) => {
+      if (value === null) recordRajeshAuthEvent("token_missing");
+      return value;
+    })
+    .catch(() => {
+      recordRajeshAuthEvent("token_read_error");
+      return null;
+    });
 }
 
 /** Signing out (a null token) also forgets the chat kept on the device. */
 export function writeRajeshToken(baseUrl: string, token: string | null): Promise<void> {
   if (token === null) clearRajeshChatCache(baseUrl);
   return token === null
-    ? SecureStore.deleteItemAsync(tokenKey(baseUrl), deviceOnly)
-    : SecureStore.setItemAsync(tokenKey(baseUrl), token, deviceOnly);
+    ? SecureStore.deleteItemAsync(tokenKey(baseUrl), deviceOnly).then(() => {
+        recordRajeshAuthEvent("token_removed");
+      })
+    : SecureStore.setItemAsync(tokenKey(baseUrl), token, deviceOnly).then(() => {
+        recordRajeshAuthEvent("token_saved");
+      });
 }
 
 /** The gateway's HTTP status for a failed call, if it answered. */
@@ -57,7 +70,12 @@ async function call<T>(
 ): Promise<T> {
   const method = init.body === undefined ? "GET" : "POST";
   // A session is bound to this device's Keystore key; each request proves possession of it.
-  const proof = init.token ? await rajeshDeviceProof(baseUrl, method, path) : undefined;
+  const proof = init.token
+    ? await rajeshDeviceProof(baseUrl, method, path).catch((error: unknown) => {
+        recordRajeshAuthEvent("proof_error");
+        throw error;
+      })
+    : undefined;
   // A connection that dies silently never answers. Without a deadline the request would hang,
   // and the chat would keep showing whatever it last heard, such as Rajesh still working.
   const request = new AbortController();
@@ -80,6 +98,8 @@ async function call<T>(
   });
   const data: any = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) recordRajeshAuthEvent("http_401");
+    if (response.status === 403) recordRajeshAuthEvent("http_403");
     throw Object.assign(
       new Error(
         typeof data?.error === "string" ? data.error : `Rajesh returned ${response.status}.`,

@@ -2,6 +2,7 @@ import { requireOptionalNativeModule } from "expo";
 import * as Base64Url from "effect/encoding/Base64Url";
 
 import { uuidv4 } from "../../../lib/uuid";
+import { recordRajeshAuthEvent } from "./rajesh-auth-diagnostics";
 
 interface NativeDeviceKeys {
   ensureKey(
@@ -32,6 +33,7 @@ export async function rajeshDeviceKeyThumbprint(baseUrl: string): Promise<string
 /** A fresh key for a new pairing, so an old session's key is never reused. */
 export async function resetRajeshDeviceKey(baseUrl: string): Promise<void> {
   await keys().deleteKey(alias(baseUrl));
+  recordRajeshAuthEvent("key_reset");
 }
 
 /** A single-use proof that this request comes from the paired device (DPoP shape, RFC 9449). */
