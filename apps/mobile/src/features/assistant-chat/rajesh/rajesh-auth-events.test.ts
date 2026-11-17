@@ -33,13 +33,11 @@ it("distinguishes a missing token from a secure storage failure", async () => {
 it("records only a fixed status label when the gateway rejects a session", async () => {
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: "private response" }),
-      }),
+    vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: "private response" }),
+    }),
   );
   await expect(listRajeshTasks("https://example.test", "private-token")).rejects.toMatchObject({
     status: 401,
