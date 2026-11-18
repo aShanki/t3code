@@ -42,6 +42,32 @@ export function rajeshErrorStatus(error: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
+/**
+ * Where requests for a gateway travel when not to its public origin, which proofs stay signed for.
+ * The default gateway is reached only through its tailnet-only relay: its public address was
+ * blocked on the owner's work networks and is switched off. Without Tailscale, Rajesh is offline.
+ */
+const RAJESH_ROUTES: Readonly<Record<string, string>> = {
+  "https://code.flarial.xyz": "https://rajesh-gb-1.tail044b4.ts.net:3781",
+};
+
+/** The address requests for `baseUrl` are sent to. */
+export const rajeshRoute = (baseUrl: string): string => RAJESH_ROUTES[baseUrl] ?? baseUrl;
+
+const unreachable = (baseUrl: string, cause?: unknown) =>
+  new Error(
+    rajeshRoute(baseUrl) === baseUrl
+      ? "Rajesh could not be reached."
+      : "Rajesh could not be reached. Check that Tailscale is on.",
+    { cause },
+  );
+
+/** Refusals from the way in, not from the gateway judging this device. */
+const ROUTE_REFUSALS = new Set([
+  "Use the public Rajesh Code address.",
+  "This tailnet address is only for the owner's devices.",
+]);
+
 export function normalizeRajeshGateway(value: string): string | null {
   try {
     const url = new URL(value.trim());
@@ -83,7 +109,7 @@ async function call<T>(
   if (init.signal?.aborted) abort();
   init.signal?.addEventListener("abort", abort);
   const deadline = setTimeout(abort, init.timeoutMs ?? REQUEST_TIMEOUT_MS);
-  const response = await fetch(baseUrl + path, {
+  const response = await fetch(rajeshRoute(baseUrl) + path, {
     method,
     headers: {
       ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
@@ -92,11 +118,25 @@ async function call<T>(
     },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
     signal: request.signal,
-  }).finally(() => {
-    clearTimeout(deadline);
-    init.signal?.removeEventListener("abort", abort);
-  });
-  const data: any = await response.json().catch(() => ({}));
+  })
+    .catch((error: unknown) => {
+      if (init.signal?.aborted || !(error instanceof TypeError)) throw error;
+      // Refused, reset or unresolvable: the way in is down, not the session.
+      throw unreachable(baseUrl, error);
+    })
+    .finally(() => {
+      clearTimeout(deadline);
+      init.signal?.removeEventListener("abort", abort);
+    });
+  const notJson = Symbol("not JSON");
+  const parsed: any = await response.json().catch(() => notJson);
+  const data: any = parsed === notJson ? {} : parsed;
+  // Only the gateway's own JSON refusal may end a session. A web filter's block page or a
+  // captive portal answering in its place (even with a 200) is an outage.
+  const fromGateway = parsed !== notJson && typeof data?.error === "string";
+  if (response.ok && parsed === notJson) throw unreachable(baseUrl);
+  if (!response.ok && response.status < 500 && (!fromGateway || ROUTE_REFUSALS.has(data.error)))
+    throw unreachable(baseUrl);
   if (!response.ok) {
     if (response.status === 401) recordRajeshAuthEvent("http_401");
     if (response.status === 403) recordRajeshAuthEvent("http_403");
@@ -198,7 +238,7 @@ export const readRajeshT3Threads = (
  * credentials, so a plain download can fetch it.
  */
 export const rajeshFileLink = async (baseUrl: string, token: string, attachmentId: string) =>
-  baseUrl +
+  rajeshRoute(baseUrl) +
   (
     await call<{ readonly url: string }>(
       baseUrl,
@@ -237,7 +277,7 @@ export async function uploadRajeshFile(
   const path = `${taskPath(key)}/uploads/${file.uploadId}`;
   const proof = await rajeshDeviceProof(baseUrl, "PUT", path);
   const { File, UploadType } = await import("expo-file-system");
-  const result = await new File(file.uri).upload(baseUrl + path, {
+  const result = await new File(file.uri).upload(rajeshRoute(baseUrl) + path, {
     httpMethod: "PUT",
     uploadType: UploadType.BINARY_CONTENT,
     mimeType: "application/octet-stream",
