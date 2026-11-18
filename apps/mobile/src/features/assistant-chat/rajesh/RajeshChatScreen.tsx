@@ -23,6 +23,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { TextInputWrapper, type PasteEventPayload } from "expo-paste-input";
 
 import { SymbolView } from "../../../components/ui/AppSymbol";
 import { AppBar } from "../../../components/ui/AppBar";
@@ -33,6 +34,7 @@ import { FilePreviewModal, type FilePreviewSource } from "../../../components/ui
 import { ComposerAttachmentStrip } from "../../../components/ComposerAttachmentStrip";
 import { ComposerActionButton } from "../../../components/ComposerToolbar";
 import {
+  convertPastedImagesToAttachments,
   pickComposerFiles,
   pickComposerMedia,
   type DraftComposerAttachment,
@@ -608,6 +610,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const dictating = voicePresentation.statusKind === "active";
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const [preparing, setPreparing] = useState(false);
+  const attachmentPreparation = useRef(false);
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const input = useRef<TextInputInstance>(null);
   const keyboard = useKeyboardOverlap();
@@ -656,18 +659,27 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
       send.cleanup();
     }
   };
+  const startPreparing = () => {
+    if (attachmentPreparation.current) return false;
+    attachmentPreparation.current = true;
+    setPreparing(true);
+    return true;
+  };
+  const finishPreparing = () => {
+    attachmentPreparation.current = false;
+    setPreparing(false);
+  };
   const submit = async () => {
     const message = text.trim();
-    if ((message === "" && attachments.length === 0) || !token || preparing) return;
+    if ((message === "" && attachments.length === 0) || !token || !startPreparing()) return;
     const drafts = attachments;
-    setPreparing(true);
     // Read before clearing the composer, so a file that cannot be read stays to be removed.
     const prepared = await filesForRajesh(drafts)
       .catch((error: unknown) => {
         Dialog.alert("Could not attach file", errorText(error));
         return null;
       })
-      .finally(() => setPreparing(false));
+      .finally(finishPreparing);
     if (prepared === null) return;
     const send = newPendingSend(
       replyTo === null ? message : rajeshReplyText(replyTo, message),
@@ -769,30 +781,59 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     if (field?.isFocused() && !Keyboard.isVisible()) field.blur();
     field?.focus();
   };
-  // The pickers and the file strip are the T3 thread composer's own.
-  const pick = async (kind: "camera" | "media" | "files") => {
-    if (preparing) return;
-    setPreparing(true);
-    const result = await (
-      kind === "files"
-        ? pickComposerFiles({ existingCount: attachments.length })
-        : pickComposerMedia({
-            existingCount: attachments.length,
-            source: kind === "camera" ? "camera" : "library",
-          })
-    ).finally(() => setPreparing(false));
-    const picked = "files" in result ? result.files : result.attachments;
-    if (picked.length === 0 && result.error === null) return;
-    const next = [...attachments, ...picked];
-    const problem = result.error ?? checkRajeshAttachments(next);
-    if (problem !== null) {
-      Dialog.alert("Could not attach file", problem);
-      if (checkRajeshAttachments(next) !== null) {
+  const appendAttachments = async (
+    failureTitle: string,
+    load: () => Promise<{
+      readonly attachments: ReadonlyArray<DraftComposerAttachment>;
+      readonly error: string | null;
+    }>,
+  ) => {
+    if (!startPreparing()) return;
+    try {
+      const { attachments: picked, error } = await load();
+      const next = [...attachments, ...picked];
+      const limit = checkRajeshAttachments(next);
+      const problem = limit ?? error;
+      if (problem !== null) Dialog.alert(failureTitle, problem);
+      if (limit !== null) {
         void releaseUnusedComposerAttachmentFiles(picked);
         return;
       }
+      if (picked.length > 0) setAttachments(next);
+    } catch {
+      Dialog.alert(failureTitle, "Try again.");
+    } finally {
+      finishPreparing();
     }
-    setAttachments(next);
+  };
+  const pick = (kind: "camera" | "media" | "files") =>
+    appendAttachments("Could not attach file", async () => {
+      const existingCount = attachments.length;
+      if (kind === "files") {
+        const { files, error } = await pickComposerFiles({ existingCount });
+        return { attachments: files, error };
+      }
+      return pickComposerMedia({ existingCount, source: kind === "camera" ? "camera" : "library" });
+    });
+  const paste = (payload: PasteEventPayload) => {
+    if (payload.type === "text" || voiceInput.freezesEditor || attachmentPreparation.current)
+      return;
+    if (payload.type === "unsupported") {
+      Dialog.alert("Could not paste image", "Copy the image again and try pasting.");
+      return;
+    }
+    if (payload.uris.length === 0) return;
+    void appendAttachments("Could not paste image", async () => {
+      const images = await convertPastedImagesToAttachments({
+        uris: payload.uris,
+        existingCount: attachments.length,
+      });
+      return {
+        attachments: images,
+        error:
+          images.length === payload.uris.length ? null : "Copy the image again and try pasting.",
+      };
+    });
   };
 
   if (token === undefined) {
@@ -1106,7 +1147,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
             <ComposerAttachmentStrip
               attachments={attachments}
               onRemove={(id) => {
-                if (preparing) return;
+                if (attachmentPreparation.current) return;
                 const removed = attachments.filter((item) => item.id === id);
                 setAttachments(attachments.filter((item) => item.id !== id));
                 void releaseUnusedComposerAttachmentFiles(removed);
@@ -1163,21 +1204,23 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                     onPickFiles={() => pick("files")}
                   />
                 </View>
-                <TextInput
-                  {...focus}
-                  ref={input}
-                  accessibilityLabel="Message Rajesh"
-                  multiline
-                  maxLength={50_000}
-                  placeholder="Message Rajesh…"
-                  placeholderTextColorClassName="accent-placeholder"
-                  value={text}
-                  onChangeText={setText}
-                  editable={!voiceInput.freezesEditor}
-                  onSelectionChange={(event) => setSelection(event.nativeEvent.selection)}
-                  textAlignVertical="center"
-                  className="max-h-36 min-h-12 min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-2.5 text-base leading-6 text-foreground"
-                />
+                <TextInputWrapper onPaste={paste} style={{ flex: 1, minWidth: 0 }}>
+                  <TextInput
+                    {...focus}
+                    ref={input}
+                    accessibilityLabel="Message Rajesh"
+                    multiline
+                    maxLength={50_000}
+                    placeholder="Message Rajesh…"
+                    placeholderTextColorClassName="accent-placeholder"
+                    value={text}
+                    onChangeText={setText}
+                    editable={!voiceInput.freezesEditor}
+                    onSelectionChange={(event) => setSelection(event.nativeEvent.selection)}
+                    textAlignVertical="center"
+                    className="max-h-36 min-h-12 rounded-none border-0 bg-transparent px-3 py-2.5 text-base leading-6 text-foreground"
+                  />
+                </TextInputWrapper>
                 <View className="h-12 items-center justify-center">
                   <ComposerDictationStartAction
                     state={voiceInput.state}
