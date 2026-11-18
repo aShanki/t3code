@@ -353,14 +353,6 @@ export async function pickComposerFiles(input: {
   return { files: attachments, error };
 }
 
-async function loadImagePicker() {
-  try {
-    return await import("expo-image-picker");
-  } catch (error) {
-    throw new Error("The photo library is unavailable right now.", { cause: error });
-  }
-}
-
 export async function pickComposerImages(input: { readonly existingCount: number }): Promise<{
   readonly images: ReadonlyArray<DraftComposerImageAttachment>;
   readonly error: string | null;
@@ -375,6 +367,7 @@ export async function pickComposerImages(input: { readonly existingCount: number
 export async function pickComposerMedia(input: {
   readonly existingCount: number;
   readonly maxVideoBytes?: number;
+  readonly source?: "camera" | "library";
 }): Promise<{
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly error: string | null;
@@ -387,13 +380,15 @@ export async function pickComposerMedia(input: {
     };
   }
 
-  let imagePicker: Awaited<ReturnType<typeof loadImagePicker>>;
+  const fromCamera = input.source === "camera";
+  const pickerName = fromCamera ? "camera" : "photo library";
+  let imagePicker: typeof import("expo-image-picker");
   try {
-    imagePicker = await loadImagePicker();
-  } catch (error) {
+    imagePicker = await import("expo-image-picker");
+  } catch {
     return {
       attachments: [],
-      error: error instanceof Error ? error.message : "The photo library is unavailable right now.",
+      error: `The ${pickerName} is unavailable right now.`,
     };
   }
 
@@ -401,19 +396,27 @@ export async function pickComposerMedia(input: {
   const endHandoff = beginForegroundHandoff();
   let result: Awaited<ReturnType<typeof imagePicker.launchImageLibraryAsync>>;
   try {
-    result = await imagePicker.launchImageLibraryAsync({
-      mediaTypes: input.maxVideoBytes === undefined ? ["images"] : ["images", "videos"],
-      allowsMultipleSelection: true,
-      selectionLimit: remainingSlots,
-      // Base64 makes iOS decode all full-size photos and stalls JS with large strings; read bytes only as needed.
-      base64: false,
-      quality: 1,
-      shouldDownloadFromNetwork: true,
-    });
+    if (fromCamera) {
+      const permission = await imagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        return { attachments: [], error: "Allow camera access in Settings to take a photo." };
+      }
+      result = await imagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 1 });
+    } else {
+      result = await imagePicker.launchImageLibraryAsync({
+        mediaTypes: input.maxVideoBytes === undefined ? ["images"] : ["images", "videos"],
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots,
+        // Base64 makes iOS decode all full-size photos and stalls JS with large strings; read bytes only as needed.
+        base64: false,
+        quality: 1,
+        shouldDownloadFromNetwork: true,
+      });
+    }
   } catch (error) {
     return {
       attachments: [],
-      error: error instanceof Error ? error.message : "Could not open the photo library.",
+      error: error instanceof Error ? error.message : `Could not open the ${pickerName}.`,
     };
   } finally {
     endHandoff();

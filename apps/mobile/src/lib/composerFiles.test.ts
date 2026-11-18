@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   documentUri: "file:///documents",
   pickFile: vi.fn(),
   pickMedia: vi.fn(),
+  capturePhoto: vi.fn(),
+  requestCameraPermission: vi.fn(),
   copy: vi.fn(),
   delete: vi.fn(),
   open: vi.fn(),
@@ -80,7 +82,11 @@ vi.mock("expo-file-system", () => {
   };
 });
 
-vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: mocks.pickMedia }));
+vi.mock("expo-image-picker", () => ({
+  launchImageLibraryAsync: mocks.pickMedia,
+  launchCameraAsync: mocks.capturePhoto,
+  requestCameraPermissionsAsync: mocks.requestCameraPermission,
+}));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: mocks.pickFile }));
 vi.mock("expo-image-manipulator", () => ({
   SaveFormat: { JPEG: "jpeg", PNG: "png", WEBP: "webp" },
@@ -104,6 +110,8 @@ describe("composer file attachments", () => {
     mocks.documentUri = "file:///documents";
     mocks.pickFile.mockReset();
     mocks.pickMedia.mockReset();
+    mocks.capturePhoto.mockReset();
+    mocks.requestCameraPermission.mockReset();
     mocks.copy.mockReset();
     mocks.delete.mockReset();
     mocks.open.mockReset();
@@ -158,6 +166,40 @@ describe("composer file attachments", () => {
         return context;
       });
     });
+
+    it("adds a captured photo as a draft image", async () => {
+      mocks.requestCameraPermission.mockResolvedValue({ granted: true });
+      mocks.capturePhoto.mockResolvedValue({ canceled: false, assets: [photo] });
+
+      await expect(pickComposerMedia({ existingCount: 0, source: "camera" })).resolves.toEqual({
+        attachments: [
+          expect.objectContaining({
+            type: "image",
+            name: "photo.jpg",
+            mimeType: "image/jpeg",
+            dataUrl: `data:image/jpeg;base64,${rendered.base64}`,
+            previewUri: rendered.uri,
+          }),
+        ],
+        error: null,
+      });
+      expect(isForegroundHandoffActive()).toBe(false);
+    });
+
+    it.each([true, false])(
+      "returns no attachment when camera permission is %s and no photo is taken",
+      async (granted) => {
+        mocks.requestCameraPermission.mockResolvedValue({ granted });
+        mocks.capturePhoto.mockResolvedValue({ canceled: true, assets: null });
+
+        await expect(pickComposerMedia({ existingCount: 0, source: "camera" })).resolves.toEqual({
+          attachments: [],
+          error: granted ? null : expect.stringContaining("Settings"),
+        });
+        expect(mocks.capturePhoto).toHaveBeenCalledTimes(granted ? 1 : 0);
+        expect(isForegroundHandoffActive()).toBe(false);
+      },
+    );
 
     it.each(["image/heic", "image/heif", undefined])(
       "renders a %s photo to JPEG natively and previews the rendered file",

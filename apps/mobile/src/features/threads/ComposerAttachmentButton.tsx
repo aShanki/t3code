@@ -9,11 +9,16 @@ const ATTACHMENT_MENU_ACTIONS: MenuAction[] = [
   { id: "photos", title: "Photo Library", image: "photo" },
   { id: "files", title: "Choose Files", image: "folder" },
 ];
+const CAMERA_ATTACHMENT_MENU_ACTIONS: MenuAction[] = [
+  { id: "camera", title: "Camera", image: "camera" },
+  ...ATTACHMENT_MENU_ACTIONS,
+];
 
 export function ComposerAttachmentButton(props: {
   readonly disabled?: boolean;
   readonly size?: "regular" | "large";
   readonly supportsFiles: boolean;
+  readonly onPickCamera?: () => Promise<void>;
   readonly onPickMedia: () => Promise<void>;
   readonly onPickFiles: () => Promise<void>;
 }) {
@@ -46,9 +51,13 @@ export function ComposerAttachmentButton(props: {
       accessible
       accessibilityLabel="Add attachment"
       accessibilityRole="button"
-      actions={ATTACHMENT_MENU_ACTIONS}
+      actions={
+        props.onPickCamera === undefined ? ATTACHMENT_MENU_ACTIONS : CAMERA_ATTACHMENT_MENU_ACTIONS
+      }
       onPressAction={({ nativeEvent }) => {
-        if (nativeEvent.event === "photos") {
+        if (nativeEvent.event === "camera") {
+          void props.onPickCamera?.();
+        } else if (nativeEvent.event === "photos") {
           void props.onPickMedia();
         } else if (nativeEvent.event === "files") {
           void props.onPickFiles();

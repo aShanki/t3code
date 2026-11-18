@@ -770,12 +770,19 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     field?.focus();
   };
   // The pickers and the file strip are the T3 thread composer's own.
-  const pick = async (kind: "media" | "files") => {
-    const result =
+  const pick = async (kind: "camera" | "media" | "files") => {
+    if (preparing) return;
+    setPreparing(true);
+    const result = await (
       kind === "files"
-        ? await pickComposerFiles({ existingCount: attachments.length })
-        : await pickComposerMedia({ existingCount: attachments.length });
+        ? pickComposerFiles({ existingCount: attachments.length })
+        : pickComposerMedia({
+            existingCount: attachments.length,
+            source: kind === "camera" ? "camera" : "library",
+          })
+    ).finally(() => setPreparing(false));
     const picked = "files" in result ? result.files : result.attachments;
+    if (picked.length === 0 && result.error === null) return;
     const next = [...attachments, ...picked];
     const problem = result.error ?? checkRajeshAttachments(next);
     if (problem !== null) {
@@ -1099,6 +1106,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
             <ComposerAttachmentStrip
               attachments={attachments}
               onRemove={(id) => {
+                if (preparing) return;
                 const removed = attachments.filter((item) => item.id === id);
                 setAttachments(attachments.filter((item) => item.id !== id));
                 void releaseUnusedComposerAttachmentFiles(removed);
@@ -1150,6 +1158,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                   <ComposerAttachmentButton
                     supportsFiles
                     disabled={preparing}
+                    onPickCamera={() => pick("camera")}
                     onPickMedia={() => pick("media")}
                     onPickFiles={() => pick("files")}
                   />
