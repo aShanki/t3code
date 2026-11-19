@@ -190,6 +190,7 @@ export const readRajeshHistory = (
   token: string,
   key: string,
   known: string | null,
+  signal?: AbortSignal,
 ) =>
   call<{
     readonly task: RajeshTaskSummary;
@@ -198,6 +199,7 @@ export const readRajeshHistory = (
     readonly unchanged?: boolean;
   }>(baseUrl, `${taskPath(key)}?view=chat${known ? `&known=${encodeURIComponent(known)}` : ""}`, {
     token,
+    ...(signal ? { signal } : {}),
   });
 
 /** Messages after the cursor; waits up to `waitMs` for one, or for the run status to change. */
@@ -224,6 +226,7 @@ export const readRajeshT3Threads = (
   token: string,
   key: string,
   known: string | null,
+  signal?: AbortSignal,
 ) =>
   call<{
     readonly threads?: ReadonlyArray<RajeshT3Thread>;
@@ -231,6 +234,7 @@ export const readRajeshT3Threads = (
     readonly unchanged?: boolean;
   }>(baseUrl, `${taskPath(key)}/t3${known ? `?known=${encodeURIComponent(known)}` : ""}`, {
     token,
+    ...(signal ? { signal } : {}),
   });
 
 /**

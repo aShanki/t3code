@@ -383,17 +383,43 @@ async function runRajeshFeed(
       threadsVersion,
     });
   };
+  let refreshingThreads = false;
+  let threadsRefreshPending = false;
   const refreshThreads = async () => {
-    const current = latest.current;
-    const result = await readRajeshT3Threads(
-      chat.baseUrl,
-      token,
-      chat.taskKey,
-      current.threadsVersion,
-    );
-    if (result.unchanged || result.threads === undefined) return;
-    commit({ ...latest.current, threads: result.threads, threadsVersion: result.version ?? null });
-    save();
+    threadsRefreshPending = true;
+    if (refreshingThreads) return;
+    refreshingThreads = true;
+    try {
+      while (threadsRefreshPending && !signal.aborted) {
+        threadsRefreshPending = false;
+        try {
+          const result = await readRajeshT3Threads(
+            chat.baseUrl,
+            token,
+            chat.taskKey,
+            latest.current.threadsVersion,
+            signal,
+          );
+          if (
+            signal.aborted ||
+            latest.current.unauthorized ||
+            result.unchanged ||
+            result.threads === undefined
+          )
+            continue;
+          commit({
+            ...latest.current,
+            threads: result.threads,
+            threadsVersion: result.version ?? null,
+          });
+          save();
+        } catch {
+          // The message poll handles connection and auth errors independently of task cards.
+        }
+      }
+    } finally {
+      refreshingThreads = false;
+    }
   };
   if (!latest.current.ready) {
     const saved = await readRajeshChatCache(chat.baseUrl, chat.taskKey);
@@ -406,7 +432,14 @@ async function runRajeshFeed(
     try {
       const current = latest.current;
       if (!current.synced) {
-        const history = await readRajeshHistory(chat.baseUrl, token, chat.taskKey, current.version);
+        const history = await readRajeshHistory(
+          chat.baseUrl,
+          token,
+          chat.taskKey,
+          current.version,
+          signal,
+        );
+        if (signal.aborted) return;
         // The copy held was a cache: a changed chat is replaced, so edits and deletions apply.
         const messages =
           history.unchanged || history.messages === undefined ? current.messages : history.messages;
@@ -420,7 +453,7 @@ async function runRajeshFeed(
           error: null,
         });
         if (!history.unchanged) save();
-        await refreshThreads();
+        void refreshThreads();
         continue;
       }
       const update = await readRajeshUpdates(chat.baseUrl, token, chat.taskKey, {
@@ -429,11 +462,12 @@ async function runRajeshFeed(
         waitMs: LONG_POLL_MS,
         signal,
       });
+      if (signal.aborted) return;
       failures = 0;
       const statusChanged = update.status !== current.status;
       if (update.messages.length === 0 && !statusChanged && current.error === null) {
         // A quiet poll: a task started just now may have its name and model by this time.
-        if (rajeshAwaitsTaskDetails(current.threads, Date.now())) await refreshThreads();
+        if (rajeshAwaitsTaskDetails(current.threads, Date.now())) void refreshThreads();
         continue;
       }
       commit({
@@ -444,15 +478,17 @@ async function runRajeshFeed(
       });
       if (update.messages.length > 0) save();
       // New launches show up with Rajesh's reply or when its run ends.
-      if (statusChanged || update.messages.some((message) => message.bot)) await refreshThreads();
+      if (statusChanged || update.messages.some((message) => message.bot)) void refreshThreads();
     } catch (error) {
       if (signal.aborted) return;
       // 401: the session ended; 403: it no longer grants this chat (for example, it predates
       // device-key binding). Either way only a new pairing helps.
       const status = rajeshErrorStatus(error);
       if (status === 401 || status === 403) {
-        clearRajeshChatCache(chat.baseUrl);
+        // Prevent a task-card request finishing after the session's cache has been cleared.
+        threadsRefreshPending = false;
         commit({ ...EMPTY_FEED, unauthorized: true });
+        clearRajeshChatCache(chat.baseUrl);
         return;
       }
       failures += 1;
