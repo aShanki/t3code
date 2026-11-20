@@ -20,6 +20,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -31,6 +32,10 @@ import { AppText as Text, AppTextInput as TextInput } from "../../../components/
 import { Button } from "../../../components/ui/Button";
 import * as Dialog from "../../../components/ui/Dialog";
 import { FilePreviewModal, type FilePreviewSource } from "../../../components/ui/FilePreviewModal";
+import {
+  VideoPreviewModal,
+  type VideoPreviewSource,
+} from "../../../components/ui/VideoPreviewModal";
 import { ComposerAttachmentStrip } from "../../../components/ComposerAttachmentStrip";
 import { ComposerActionButton } from "../../../components/ComposerToolbar";
 import {
@@ -78,6 +83,7 @@ import {
   type RajeshOutgoingFile,
 } from "./rajesh-gateway";
 import { checkRajeshAttachments, filesForRajesh, inlineRajeshFiles } from "./rajesh-attachment";
+import { discordPreviewURL } from "./rajesh-attachment-url";
 import {
   clearRajeshChatCache,
   readRajeshChatCache,
@@ -657,10 +663,29 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   const followSend = useRef(false);
   /** Set while scrolled away from the latest message: the newest message seen before leaving. */
   const [awayFrom, setAwayFrom] = useState<string | null>(null);
-  const [imagePreview, setImagePreview] = useState<{
-    readonly source: FilePreviewSource;
-    readonly dispose: () => void;
-  } | null>(null);
+  const [preview, setPreview] = useState<
+    | { readonly kind: "file"; readonly source: FilePreviewSource }
+    | { readonly kind: "video"; readonly source: VideoPreviewSource }
+    | null
+  >(null);
+  const previewTransfer = useRef<AbortController | null>(null);
+  const disposePreview = useRef<(() => void) | null>(null);
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels downloads and deletes private media on exit
+  useEffect(
+    () => () => {
+      previewTransfer.current?.abort();
+      disposePreview.current?.();
+    },
+    [],
+  );
+
+  const closePreview = () => {
+    disposePreview.current?.();
+    disposePreview.current = null;
+    setPreview(null);
+  };
+
   const [openingFile, setOpeningFile] = useState<string | null>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the session token from secure storage once per gateway
@@ -735,17 +760,17 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
   };
   const scrollToLatest = () => list.current?.scrollToOffset({ offset: 0, animated: true });
   /** A device copy of a file, fetched only when it is opened. */
-  const downloadFile = async (attachment: RajeshAttachment) => {
+  const downloadFile = async (attachment: RajeshAttachment, signal: AbortSignal) => {
     if (!token) throw new Error("Connect Rajesh again to open files.");
     // The gateway's copies download through a single-use link; Discord's copies by their CDN link.
     const url = attachment.id.startsWith("discord-attachment:")
-      ? attachment.url
+      ? discordPreviewURL(attachment.url)
       : await rajeshFileLink(chat.baseUrl, token, attachment.id);
     if (!url) throw new Error("Rajesh keeps no copy of this file. Open it in Discord.");
     const local = await downloadAttachmentForPreview({
       url,
       attachment: { name: attachment.name, mimeType: attachment.mime },
-      signal: new AbortController().signal,
+      signal,
     });
     if (local === null) throw new Error("The download was interrupted. Try again.");
     return local;
@@ -765,22 +790,38 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
       );
       return;
     }
-    if (openingFile !== null) return;
+    if (previewTransfer.current !== null || preview !== null) return;
+    const controller = new AbortController();
+    previewTransfer.current = controller;
     setOpeningFile(attachment.id);
-    void downloadFile(attachment)
-      .then((local) => use(attachment, local))
-      .catch((error: unknown) => Dialog.alert("Could not open file", errorText(error)))
-      .finally(() => setOpeningFile(null));
+    void downloadFile(attachment, controller.signal)
+      .then((local) => {
+        if (controller.signal.aborted) local.dispose();
+        else return use(attachment, local);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) Dialog.alert("Could not open file", errorText(error));
+      })
+      .finally(() => {
+        if (previewTransfer.current === controller) previewTransfer.current = null;
+        if (!controller.signal.aborted) setOpeningFile(null);
+      });
   };
-  // The same viewers as T3 threads: images in the media viewer, everything else on the file page.
   const openFile = (file: RajeshFileRef) =>
     withFile(file, (attachment, local) => {
       const base = { uri: local.uri, name: attachment.name, mimeType: attachment.mime };
-      if (attachment.mime.startsWith("image/")) {
-        setImagePreview({
+      const kind = filePreviewKind(base);
+      if (kind === "image") {
+        disposePreview.current = local.dispose;
+        setPreview({
+          kind: "file",
           source: { kind: "image", ...base, actionsSource: base },
-          dispose: local.dispose,
         });
+        return;
+      }
+      if (kind === "video") {
+        disposePreview.current = local.dispose;
+        setPreview({ kind: "video", source: { type: "media", ...base } });
         return;
       }
       navigation.navigate("ThreadAttachment", {
@@ -1145,11 +1186,12 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
         </View>
       )}
       <FilePreviewModal
-        source={imagePreview?.source ?? null}
-        onRequestClose={() => {
-          imagePreview?.dispose();
-          setImagePreview(null);
-        }}
+        source={preview?.kind === "file" ? preview.source : null}
+        onRequestClose={closePreview}
+      />
+      <VideoPreviewModal
+        source={preview?.kind === "video" ? preview.source : null}
+        onRequestClose={closePreview}
       />
       <View className="bg-screen px-3 pt-2" style={{ paddingBottom: Math.max(insets.bottom, 8) }}>
         {replyTo !== null ? (
@@ -1188,7 +1230,17 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
                 setAttachments(attachments.filter((item) => item.id !== id));
                 void releaseUnusedComposerAttachmentFiles(removed);
               }}
-              onPressPreview={(source) => setImagePreview({ source, dispose: () => undefined })}
+              onPressPreview={(source) => {
+                if (!previewTransfer.current) setPreview({ kind: "file", source });
+              }}
+              onPressVideo={(attachment, sourceIdentifier) => {
+                if (!previewTransfer.current) {
+                  setPreview({
+                    kind: "video",
+                    source: { type: "local", attachment, sourceIdentifier },
+                  });
+                }
+              }}
               onPressDocument={(attachment) =>
                 navigation.navigate("ThreadAttachment", {
                   attachmentId: attachment.id,
@@ -1314,11 +1366,13 @@ function FileChip(props: {
 }) {
   const { file, onOpen, onSave } = props;
   const user = props.tone === "user";
-  const image = file.attachment?.mime.startsWith("image/") === true;
+  const kind = file.attachment
+    ? filePreviewKind({ name: file.name, mimeType: file.attachment.mime })
+    : null;
   const content = (
     <>
       <SymbolView
-        name={image ? "photo" : "doc.text"}
+        name={kind === "image" ? "photo" : kind === "video" ? "play" : "doc.text"}
         size={16}
         tintColorClassName={user ? "accent-user-bubble-foreground" : "accent-foreground-muted"}
         type="monochrome"
@@ -1344,7 +1398,7 @@ function FileChip(props: {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${file.name}`}
+      accessibilityLabel={`${kind === "image" || kind === "video" ? "Preview" : "Open"} ${file.name}`}
       accessibilityHint="Long press to save it to this device"
       onPress={() => onOpen(file)}
       onLongPress={onSave ? () => onSave(file) : undefined}
