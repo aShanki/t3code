@@ -11,6 +11,7 @@ import {
   type TextInputInstance,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { useAtomValue } from "@effect/atom-react";
 import { Directory, File } from "expo-file-system";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, {
@@ -57,11 +58,13 @@ import { useVoiceInputController } from "../../voice-input/useVoiceInputControll
 import { resolveVoiceComposerPresentation } from "../../voice-input/voiceInputPresentation";
 import { downloadAttachmentForPreview } from "../../../lib/attachmentDownload";
 import { uuidv4 } from "../../../lib/uuid";
+import { appAtomRegistry } from "../../../state/atom-registry";
 import { SelectableMarkdownText } from "../../../native/SelectableMarkdownText";
 import type { RajeshChat } from "../../../persistence/mobile-preferences";
 import { useSelectWorkspaceDetail } from "../../layout/workspace/useSelectWorkspaceDetail";
 import { useMarkdownStyles } from "../../threads/ThreadFeed";
 import { useSetRajeshChat } from "../assistant-chat-state";
+import { requestedRajeshInboxAtom } from "../chat-link";
 import { useKeyboardOverlap } from "../use-keyboard-overlap";
 import { TaskCard } from "../TaskCard";
 import {
@@ -82,6 +85,16 @@ import {
   type RajeshDeviceLogin,
   type RajeshOutgoingFile,
 } from "./rajesh-gateway";
+import {
+  createRajeshAttentionSummaryStore,
+  parseRajeshAttentionSummary,
+  type RajeshAttentionSummaryStore,
+} from "./rajesh-attention";
+import {
+  RajeshAttentionButton,
+  RajeshAttentionSheet,
+  useRajeshAttention,
+} from "./RajeshAttentionInbox";
 import { checkRajeshAttachments, filesForRajesh, inlineRajeshFiles } from "./rajesh-attachment";
 import { discordPreviewURL } from "./rajesh-attachment-url";
 import {
@@ -374,6 +387,7 @@ async function runRajeshFeed(
   signal: AbortSignal,
   latest: { current: Feed },
   setFeed: (feed: Feed) => void,
+  attention: RajeshAttentionSummaryStore,
 ) {
   const commit = (next: Feed) => {
     latest.current = { ...next, receivedAt: Date.now() };
@@ -465,11 +479,15 @@ async function runRajeshFeed(
       const update = await readRajeshUpdates(chat.baseUrl, token, chat.taskKey, {
         after: rajeshCursor(current.messages),
         status: current.status,
+        // Waiting on the inbox's version too, a change to it answers the poll at once.
+        attentionRev: attention.get()?.rev ?? null,
         waitMs: LONG_POLL_MS,
         signal,
       });
       if (signal.aborted) return;
       failures = 0;
+      const inbox = parseRajeshAttentionSummary(update.attention);
+      if (inbox !== null) attention.set(inbox);
       const statusChanged = update.status !== current.status;
       if (update.messages.length === 0 && !statusChanged && current.error === null) {
         // A quiet poll: a task started just now may have its name and model by this time.
@@ -505,7 +523,11 @@ async function runRajeshFeed(
 }
 
 /** History once, then a long-poll for new messages, only while this tab is shown and the app is active. */
-function useRajeshFeed(chat: RajeshChat, token: string | null) {
+function useRajeshFeed(
+  chat: RajeshChat,
+  token: string | null,
+  attention: RajeshAttentionSummaryStore,
+) {
   const [feed, setFeed] = useState<Feed>(EMPTY_FEED);
   const latest = useRef<Feed>(EMPTY_FEED);
   const [active, setActive] = useState(AppState.currentState === "active");
@@ -522,9 +544,9 @@ function useRajeshFeed(chat: RajeshChat, token: string | null) {
   useEffect(() => {
     if (token === null || !active) return;
     const controller = new AbortController();
-    void runRajeshFeed(chat, token, controller.signal, latest, setFeed);
+    void runRajeshFeed(chat, token, controller.signal, latest, setFeed, attention);
     return () => controller.abort();
-  }, [chat, token, active]);
+  }, [chat, token, active, attention]);
 
   return feed;
 }
@@ -699,7 +721,18 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
     };
   }, [chat.baseUrl]);
 
-  const feed = useRajeshFeed(chat, token ?? null);
+  // The inbox's count and version, which the long-poll keeps current and the inbox reads.
+  const [attentionSummary] = useState(createRajeshAttentionSummaryStore);
+  const feed = useRajeshFeed(chat, token ?? null, attentionSummary);
+  // Opened from the icon, or by a tapped attention push asking from outside React.
+  const [inboxOpened, setInboxOpened] = useState(false);
+  const inboxRequested = useAtomValue(requestedRajeshInboxAtom);
+  const inboxOpen = inboxOpened || inboxRequested;
+  const closeInbox = () => {
+    setInboxOpened(false);
+    appAtomRegistry.set(requestedRajeshInboxAtom, false);
+  };
+  const attention = useRajeshAttention(chat, token ?? null, attentionSummary, inboxOpen);
   const deliver = async (send: PendingSend) => {
     if (!token) return;
     const update = (change: Partial<Pick<PendingSend, "error" | "progress">>) =>
@@ -1009,7 +1042,7 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
       style={{ paddingTop: insets.top, paddingBottom: keyboard.overlap }}
     >
       {feed.error && feed.ready ? (
-        <View className="mx-4 mt-3 rounded-xl bg-warning p-3">
+        <View className="mt-3 mr-16 ml-4 rounded-xl bg-warning p-3">
           <Text className="text-[13px] leading-[18px] text-warning-foreground">
             Connection interrupted. Reconnecting…
           </Text>
@@ -1185,6 +1218,20 @@ export function RajeshChatScreen(props: { readonly chat: RajeshChat }) {
           )}
         </View>
       )}
+      {/* Over the chat rather than in a header, so opening the inbox never moves the list. */}
+      <RajeshAttentionButton
+        count={attention.count}
+        urgent={attention.urgent}
+        top={insets.top + 8}
+        onPress={() => setInboxOpened(true)}
+      />
+      {inboxOpen ? (
+        <RajeshAttentionSheet
+          attention={attention}
+          onClose={closeInbox}
+          onOpenThread={openThread}
+        />
+      ) : null}
       <FilePreviewModal
         source={preview?.kind === "file" ? preview.source : null}
         onRequestClose={closePreview}

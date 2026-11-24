@@ -1,5 +1,6 @@
 import { Directory, File, Paths } from "expo-file-system";
 
+import { parseRajeshAttentionDrafts, type RajeshAttentionDrafts } from "./rajesh-attention";
 import type { RajeshMessage, RajeshT3Thread } from "./rajesh-transcript";
 
 /** The last synced chat, shown at launch while the gateway confirms or replaces it. */
@@ -63,8 +64,39 @@ export function writeRajeshChatCache(baseUrl: string, snapshot: RajeshChatSnapsh
 }
 
 export function clearRajeshChatCache(baseUrl: string): void {
+  for (const file of [cacheFile(baseUrl), draftsFile(baseUrl)]) {
+    try {
+      if (file.exists) file.delete();
+    } catch {}
+  }
+}
+
+// Inbox replies being typed, with the request ID a retry must reuse, survive the app closing.
+const draftsFile = (baseUrl: string) =>
+  new File(
+    new Directory(Paths.cache, "rajesh-chat"),
+    `${baseUrl.replace(/[^A-Za-z0-9.-]/g, "_")}.attention-drafts.json`,
+  );
+
+export async function readRajeshAttentionDrafts(baseUrl: string): Promise<RajeshAttentionDrafts> {
   try {
-    const file = cacheFile(baseUrl);
-    if (file.exists) file.delete();
-  } catch {}
+    const file = draftsFile(baseUrl);
+    return file.exists ? parseRajeshAttentionDrafts(JSON.parse(await file.text())) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeRajeshAttentionDrafts(baseUrl: string, drafts: RajeshAttentionDrafts): void {
+  try {
+    const file = draftsFile(baseUrl);
+    if (Object.keys(drafts).length === 0) {
+      if (file.exists) file.delete();
+      return;
+    }
+    file.parentDirectory.create({ idempotent: true, intermediates: true });
+    file.writeSync(JSON.stringify(drafts));
+  } catch (error) {
+    console.warn("[rajesh] could not save inbox reply drafts", error);
+  }
 }

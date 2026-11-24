@@ -12,11 +12,16 @@ vi.mock("./rajesh-auth-diagnostics", () => ({
 }));
 import { rajeshDeviceProof } from "./rajesh-device-key";
 import {
+  dismissRajeshAttention,
   listRajeshTasks,
+  rajeshErrorBody,
   rajeshErrorStatus,
   rajeshFileLink,
   rajeshRoute,
+  readRajeshAttention,
   readRajeshHistory,
+  readRajeshUpdates,
+  replyRajeshAttention,
 } from "./rajesh-gateway";
 
 const PUBLIC = "https://code.flarial.xyz";
@@ -87,4 +92,54 @@ it("the gateway's own refusals and errors keep their status", async () => {
     const error = await listRajeshTasks(PUBLIC, "token").catch((e: unknown) => e);
     expect(rajeshErrorStatus(error)).toBe(status);
   }
+});
+
+it("the long-poll waits on the inbox's version once it has one", async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(
+      answer(200, { messages: [], status: "idle", attention: { open: 1, rev: "r 1" } }),
+    );
+  vi.stubGlobal("fetch", fetch);
+  const poll = (attentionRev: string | null) =>
+    readRajeshUpdates(PUBLIC, "token", "discord:personal:1", {
+      after: { time: 5, id: "m" },
+      status: null,
+      attentionRev,
+      waitMs: 25_000,
+      signal: new AbortController().signal,
+    });
+  expect((await poll(null)).attention).toEqual({ open: 1, rev: "r 1" });
+  expect(fetch.mock.calls[0]![0]).not.toContain("attentionRev");
+  await poll("r 1");
+  expect(fetch.mock.calls[1]![0]).toBe(
+    `${TAILNET}/api/tasks/discord%3Apersonal%3A1/updates?afterTime=5&afterId=m&waitMs=25000&attentionRev=r%201`,
+  );
+});
+
+it("inbox calls are signed task calls, and a refused reply keeps the item it was for", async () => {
+  const fetch = vi.fn().mockResolvedValue(answer(200, { items: [], open: 0, rev: "r" }));
+  vi.stubGlobal("fetch", fetch);
+  await readRajeshAttention(PUBLIC, "token", "k", "recent");
+  expect(fetch.mock.calls[0]![0]).toBe(`${TAILNET}/api/tasks/k/attention?scope=recent`);
+  expect(vi.mocked(rajeshDeviceProof)).toHaveBeenCalledWith(
+    PUBLIC,
+    "GET",
+    "/api/tasks/k/attention?scope=recent",
+  );
+
+  fetch.mockResolvedValue(answer(200, { item: { id: "a/1" } }));
+  await dismissRajeshAttention(PUBLIC, "token", "k", "a/1", "req-d");
+  expect(fetch.mock.calls[1]![0]).toBe(`${TAILNET}/api/tasks/k/attention/a%2F1/dismiss`);
+  expect(JSON.parse(fetch.mock.calls[1]![1].body)).toEqual({ requestId: "req-d" });
+
+  const closed = { error: "Already closed.", item: { id: "a/1", status: "resolved" } };
+  fetch.mockResolvedValue(answer(409, closed));
+  const error = await replyRajeshAttention(PUBLIC, "token", "k", "a/1", "req-r", "Yes").catch(
+    (e: unknown) => e,
+  );
+  expect(JSON.parse(fetch.mock.calls[2]![1].body)).toEqual({ requestId: "req-r", text: "Yes" });
+  expect(fetch.mock.calls[2]![1].headers.Authorization).toBe("Bearer token");
+  expect(rajeshErrorStatus(error)).toBe(409);
+  expect(rajeshErrorBody(error)).toEqual(closed);
 });

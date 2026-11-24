@@ -42,6 +42,11 @@ export function rajeshErrorStatus(error: unknown): number | undefined {
   return typeof status === "number" ? status : undefined;
 }
 
+/** The gateway's JSON answer to a failed call, such as the item a refused reply was for. */
+export function rajeshErrorBody(error: unknown): unknown {
+  return error instanceof Error ? Reflect.get(error, "body") : undefined;
+}
+
 /**
  * Where requests for a gateway travel when not to its public origin, which proofs stay signed for.
  * The default gateway is reached only through its tailnet-only relay: its public address was
@@ -144,7 +149,7 @@ async function call<T>(
       new Error(
         typeof data?.error === "string" ? data.error : `Rajesh returned ${response.status}.`,
       ),
-      { status: response.status },
+      { status: response.status, body: data },
     );
   }
   return data as T;
@@ -202,7 +207,11 @@ export const readRajeshHistory = (
     ...(signal ? { signal } : {}),
   });
 
-/** Messages after the cursor; waits up to `waitMs` for one, or for the run status to change. */
+/**
+ * Messages after the cursor; waits up to `waitMs` for one, or for the run status to change.
+ * With the inbox version last seen, it also answers when the inbox changes. Gateways that
+ * predate the inbox send no `attention`.
+ */
 export const readRajeshUpdates = (
   baseUrl: string,
   token: string,
@@ -210,15 +219,68 @@ export const readRajeshUpdates = (
   input: {
     readonly after: RajeshCursor;
     readonly status: string | null;
+    readonly attentionRev: string | null;
     readonly waitMs: number;
     readonly signal: AbortSignal;
   },
 ) =>
-  call<{ readonly messages: ReadonlyArray<RajeshMessage>; readonly status: string }>(
+  call<{
+    readonly messages: ReadonlyArray<RajeshMessage>;
+    readonly status: string;
+    readonly attention?: unknown;
+  }>(
     baseUrl,
     `${taskPath(key)}/updates?afterTime=${input.after.time}&afterId=${encodeURIComponent(input.after.id)}&waitMs=${input.waitMs}` +
-      (input.status === null ? "" : `&status=${encodeURIComponent(input.status)}`),
+      (input.status === null ? "" : `&status=${encodeURIComponent(input.status)}`) +
+      (input.attentionRev === null
+        ? ""
+        : `&attentionRev=${encodeURIComponent(input.attentionRev)}`),
     { token, signal: input.signal, timeoutMs: input.waitMs + 10_000 },
+  );
+
+/** What needs the owner: open items, or with `recent`, also those closed in the last week. */
+export const readRajeshAttention = (
+  baseUrl: string,
+  token: string,
+  key: string,
+  scope: "open" | "recent",
+  signal?: AbortSignal,
+) =>
+  call<unknown>(baseUrl, `${taskPath(key)}/attention?scope=${scope}`, {
+    token,
+    ...(signal ? { signal } : {}),
+  });
+
+/**
+ * Answers an item; Rajesh's response then arrives in the chat. Idempotent per request ID, so
+ * a retry must reuse the ID of the send it repeats. 409: the item was already closed.
+ */
+export const replyRajeshAttention = (
+  baseUrl: string,
+  token: string,
+  key: string,
+  id: string,
+  requestId: string,
+  text: string,
+) =>
+  call<{ readonly accepted?: boolean; readonly item?: unknown }>(
+    baseUrl,
+    `${taskPath(key)}/attention/${encodeURIComponent(id)}/reply`,
+    { token, body: { requestId, text } },
+  );
+
+/** Closes an item without answering it. Dismissing a closed item answers it as it stands. */
+export const dismissRajeshAttention = (
+  baseUrl: string,
+  token: string,
+  key: string,
+  id: string,
+  requestId: string,
+) =>
+  call<{ readonly item?: unknown }>(
+    baseUrl,
+    `${taskPath(key)}/attention/${encodeURIComponent(id)}/dismiss`,
+    { token, body: { requestId } },
   );
 
 export const readRajeshT3Threads = (
