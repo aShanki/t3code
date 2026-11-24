@@ -70,6 +70,10 @@ class T3AgentNotificationsModule : Module() {
       if (visible) appContext.reactContext?.let { AgentNotifications.cardsSeen(it, "/chat") }
     }
 
+    Function("cancelCard") { slot: String ->
+      appContext.reactContext?.let { AgentNotifications.cancelCard(it, slot) }
+    }
+
     Function("openLiveUpdateSettings") {
       val context = appContext.reactContext
       if (context == null || Build.VERSION.SDK_INT < 36) {

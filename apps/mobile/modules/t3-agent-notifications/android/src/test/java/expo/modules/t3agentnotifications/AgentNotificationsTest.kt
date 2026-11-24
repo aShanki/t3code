@@ -214,6 +214,42 @@ class AgentNotificationsTest : AgentNotificationsFixture() {
   }
 
   @Test
+  fun anAttentionItemIsItsOwnCardThatOpensTheInboxAndOutlivesOpeningTheChat() {
+    AgentNotifications.setChatPush(context, "t3code-chat")
+    AgentNotifications.receiveChat(context, card("chat-1", "chat", "alert_body" to "Morning."))
+    AgentNotifications.receiveChat(
+      context,
+      card(
+        "inbox-1",
+        "inbox:att_1",
+        "alert_title" to "Needs you · Approve deploy?",
+        "alert_body" to "api-v2 is ready.",
+        "alert_state" to "attention",
+        "alert_inbox" to "att_1",
+      )
+    )
+    val item = cards().single { it.id == "inbox:att_1".hashCode() }
+    assertEquals("api-v2 is ready.", text(item))
+    assertEquals(
+      "t3code-chat://chat?inbox=att_1",
+      shadowOf(item.notification.contentIntent).savedIntent.dataString
+    )
+    // The conversation card keeps only the chat's own messages.
+    assertEquals(
+      listOf("Morning."),
+      NotificationCompat.MessagingStyle
+        .extractMessagingStyleFromNotification(
+          cards().single { it.id == "chat".hashCode() }.notification
+        )!!
+        .messages.map { it.text.toString() }
+    )
+    AgentNotifications.cardsSeen(context, "/chat")
+    assertEquals(listOf("inbox:att_1".hashCode()), cards().map { it.id })
+    AgentNotifications.cancelCard(context, "inbox:att_1")
+    assertTrue(cards().isEmpty())
+  }
+
+  @Test
   fun alertHistoryEvictsOnlyTheOldestEntryAfterCapacity() {
     lifecycle.currentState = Lifecycle.State.RESUMED
     for (id in 0..64) AgentNotifications.receive(context, update("alert-$id", false))

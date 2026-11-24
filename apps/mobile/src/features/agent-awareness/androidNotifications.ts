@@ -17,6 +17,7 @@ interface AndroidAgentNotifications {
   setBackgroundConnection?(enabled: boolean, text: string): void;
   setChatPush?(scheme: string | null): void;
   setChatOnScreen?(visible: boolean): void;
+  cancelCard?(slot: string): void;
   openLiveUpdateSettings?(): boolean;
   showShowcaseActivity?(scheme: string, data: Record<string, string>): void;
 }
@@ -88,6 +89,11 @@ export function setAndroidChatPush(enabled: boolean): void {
 /** While the chat is on screen in the open app, its pushed messages are not also notified. */
 export function setAndroidChatOnScreen(visible: boolean): void {
   native?.setChatOnScreen?.(visible);
+}
+
+/** Removes the notification card in `slot`, such as a closed attention item's. */
+export function cancelAndroidAgentCard(slot: string): void {
+  native?.cancelCard?.(slot);
 }
 
 export function setAndroidThreadOnScreen(path: string | null): void {

@@ -171,6 +171,8 @@ object AgentNotifications {
   /** Opening a thread or the chat clears the cards that led there. */
   fun cardsSeen(context: Context, path: String) = AgentCards.seen(context, path)
 
+  fun cancelCard(context: Context, slot: String) = AgentCards.cancel(context, slot)
+
   @Synchronized
   fun dismiss(context: Context) {
     context.getSharedPreferences(
@@ -464,8 +466,8 @@ object AgentNotifications {
     id: Int
   ): PendingIntent? {
     val threadPath = path?.takeIf { it.startsWith("/threads/") }
-    val route = threadPath?.takeUnless { it.contains('?') || it.contains('#') }
-      ?: if (path == CHAT_PATH) CHAT_PATH else "/"
+    val chatPath = path?.takeIf { it == CHAT_PATH || it.startsWith(AgentCards.INBOX_PATH) }
+    val route = threadPath?.takeUnless { it.contains('?') || it.contains('#') } ?: chatPath ?: "/"
     val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
       ?: return null
     intent.setAction(Intent.ACTION_VIEW).setData(Uri.parse("$scheme:/$route"))

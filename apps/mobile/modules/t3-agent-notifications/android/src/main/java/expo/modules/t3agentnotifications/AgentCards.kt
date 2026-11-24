@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.net.Uri
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
@@ -21,6 +22,9 @@ import org.json.JSONObject
  * updates its text without alerting again, and one with no text of its own (`alert_generic`)
  * never replaces one that has it.
  *
+ * An attention item (`alert_inbox`) is a card of its own like a task's, opening the chat with
+ * the inbox shown. Opening the chat leaves it; it goes once the item is closed (`cancel`).
+ *
  * Cards carry no group: Android 16 regroups a grouped notification whose summary is not posted
  * yet, and shows a summary that outlives its children as a row of its own.
  */
@@ -29,6 +33,7 @@ internal object AgentCards {
   private const val TASK_CHANNEL = "task-updates"
   private const val QUIET_CHANNEL = "quiet-updates"
   private const val TASK_SLOT = "task:"
+  internal const val INBOX_PATH = "/chat?inbox="
   private const val EXTRA_STATE = "t3.card.state"
   private const val EXTRA_POSTED = "t3.card.posted"
   private const val EXTRA_PATH = "t3.card.path"
@@ -59,17 +64,19 @@ internal object AgentCards {
       now - shown.getLong(EXTRA_POSTED) < SAME_EVENT_MS
     if (sameEvent && generic && !shown!!.getBoolean(EXTRA_GENERIC)) return
     val quiet = data["alert_quiet"] == "1"
+    val inbox = data["alert_inbox"]?.takeIf { it.isNotBlank() }
+    val path = if (inbox != null) "$INBOX_PATH${Uri.encode(inbox)}" else data["alert_path"]
     val extras = Bundle().apply {
       putString(EXTRA_STATE, state)
       putLong(EXTRA_POSTED, now)
-      putString(EXTRA_PATH, data["alert_path"])
+      putString(EXTRA_PATH, path)
       putString(EXTRA_THREAD, data["alert_thread"])
       putBoolean(EXTRA_GENERIC, generic)
     }
     val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
-    val open = AgentNotifications.contentIntent(context, scheme, data["alert_path"], id)
+    val open = AgentNotifications.contentIntent(context, scheme, path, id)
     channels(context)
-    if (slot.startsWith(TASK_SLOT)) {
+    if (slot.startsWith(TASK_SLOT) || inbox != null) {
       val title = data["alert_title"].orEmpty().take(120)
       val body = data["alert_body"].orEmpty().take(608)
       val builder = base(context, if (quiet) QUIET_CHANNEL else TASK_CHANNEL, quiet)
@@ -120,6 +127,12 @@ internal object AgentCards {
           it.notification.extras.getString(EXTRA_THREAD) == path
         )
     }.forEach { manager.cancel(TAG, it.id) }
+  }
+
+  /** The card in `slot` has nothing left to say, such as an attention item now closed. */
+  @Synchronized
+  fun cancel(context: Context, slot: String) {
+    manager(context).cancel(TAG, slot.hashCode())
   }
 
   @Synchronized
